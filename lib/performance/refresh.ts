@@ -188,14 +188,18 @@ function summarize(rows: Array<{
   data_status: string;
 }>) {
   const okRows = rows.filter((r) => r.data_status === "ok");
-  const clicks = okRows.reduce((sum, r) => sum + (r.clicks ?? 0), 0);
-  const impressions = okRows.reduce((sum, r) => sum + (r.impressions ?? 0), 0);
-  const previousClicks = okRows.reduce((sum, r) => sum + (r.previous_clicks ?? 0), 0);
-  const previousImpressions = okRows.reduce((sum, r) => sum + (r.previous_impressions ?? 0), 0);
+  // pg returns `numeric` columns as strings (it won't silently narrow arbitrary
+  // precision into a JS number) — Number(...) here is load-bearing, not
+  // decorative. Without it "+" on two numeric-as-string values concatenates
+  // digits instead of adding them.
+  const clicks = okRows.reduce((sum, r) => sum + Number(r.clicks ?? 0), 0);
+  const impressions = okRows.reduce((sum, r) => sum + Number(r.impressions ?? 0), 0);
+  const previousClicks = okRows.reduce((sum, r) => sum + Number(r.previous_clicks ?? 0), 0);
+  const previousImpressions = okRows.reduce((sum, r) => sum + Number(r.previous_impressions ?? 0), 0);
   const ctr = impressions > 0 ? clicks / impressions : 0;
   const positionRows = okRows.filter((r) => r.position !== null);
   const position = positionRows.length
-    ? positionRows.reduce((sum, r) => sum + (r.position ?? 0), 0) / positionRows.length
+    ? positionRows.reduce((sum, r) => sum + Number(r.position ?? 0), 0) / positionRows.length
     : null;
 
   const clickDelta = clicks - previousClicks;
