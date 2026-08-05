@@ -77,7 +77,14 @@ via `pg`, Google Sheets + Search Console APIs via `googleapis`, Recharts.
    - Go to **Admin → Settings** and map:
      - each `member_name` (as it appears in the Sheet) to that person's login email,
      - each `project` to its Search Console property (e.g. `sc-domain:example.com`).
-   - Go to **Admin → Overview** and click **Sync now**, then **Refresh now** for a range.
+     Saving a mapping backfills the URLs already synced, so the order of Settings vs. Sync
+     does not matter.
+   - Go to **Admin → Overview** and click **Sync now**, then **Refresh now**. Each range is
+     cached separately — pick **All ranges** (the default) so the 1M/3M/6M views are populated.
+
+   The Search Console property string must match the property exactly as it exists in GSC:
+   `https://example.com/` for a URL-prefix property, `sc-domain:example.com` for a Domain
+   property. A mismatch surfaces as `permission_denied` in the URL's Status column.
 
 ## Google Sheet format
 

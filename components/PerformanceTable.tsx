@@ -15,6 +15,7 @@ export interface PerformanceTableRow {
   click_growth_pct: number | null;
   data_status: string;
   growth_status: string;
+  error_message?: string | null;
 }
 
 const statusBadgeClass: Record<string, string> = {
@@ -61,9 +62,15 @@ export function PerformanceTable({ rows, showMember = false }: { rows: Performan
               <td className="px-3 py-2 text-right">{formatPosition(row.position)}</td>
               <td className="px-3 py-2 text-right">{formatGrowthPct(row.click_growth_pct)}</td>
               <td className="px-3 py-2">
-                <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${statusBadgeClass[row.data_status] ?? ""}`}>
+                <span
+                  className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${statusBadgeClass[row.data_status] ?? ""}`}
+                  title={row.error_message ?? undefined}
+                >
                   {DATA_STATUS_LABELS[row.data_status] ?? row.data_status}
                 </span>
+                {row.error_message && (
+                  <p className="mt-1 max-w-xs text-xs text-red-600 line-clamp-2">{row.error_message}</p>
+                )}
               </td>
             </tr>
           ))}

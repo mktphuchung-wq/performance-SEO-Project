@@ -10,6 +10,7 @@ export interface UpsertPerformanceCacheInput {
   previousStartDate: string | null;
   previousEndDate: string | null;
   growth: GrowthResult;
+  errorMessage?: string | null;
 }
 
 export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput): Promise<void> {
@@ -18,8 +19,9 @@ export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput)
     `insert into public.seo_performance_cache
        (content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
         clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
-        click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status, refreshed_at, updated_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20, now(), now())
+        click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
+        error_message, refreshed_at, updated_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now(), now())
      on conflict (content_url_id, range_key) do update set
        start_date = excluded.start_date,
        end_date = excluded.end_date,
@@ -39,6 +41,7 @@ export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput)
        impression_growth_pct = excluded.impression_growth_pct,
        growth_status = excluded.growth_status,
        data_status = excluded.data_status,
+       error_message = excluded.error_message,
        refreshed_at = now(),
        updated_at = now()`,
     [
@@ -62,6 +65,7 @@ export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput)
       g.impressionGrowthPct,
       g.growthStatus,
       g.dataStatus,
+      input.errorMessage ?? null,
     ],
   );
 }
@@ -82,6 +86,7 @@ export interface UrlPerformanceRow {
   impression_growth_pct: number | null;
   growth_status: string;
   data_status: string;
+  error_message: string | null;
   refreshed_at: string;
   project: string;
   url: string;
@@ -95,7 +100,7 @@ export async function listPerformanceByMemberEmail(email: string, rangeKey: Rang
     `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
-            p.growth_status, p.data_status, p.refreshed_at,
+            p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type
      from public.content_urls c
      join public.seo_performance_cache p on p.content_url_id = c.id and p.range_key = $2
@@ -122,7 +127,7 @@ export async function listPerformanceAll(rangeKey: RangeKey, filters: { project?
     `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
-            p.growth_status, p.data_status, p.refreshed_at,
+            p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type
      from public.content_urls c
      join public.seo_performance_cache p on p.content_url_id = c.id
@@ -137,7 +142,7 @@ export async function getPerformanceForContentUrl(contentUrlId: string): Promise
     `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
-            p.growth_status, p.data_status, p.refreshed_at,
+            p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type
      from public.seo_performance_cache p
      join public.content_urls c on c.id = p.content_url_id

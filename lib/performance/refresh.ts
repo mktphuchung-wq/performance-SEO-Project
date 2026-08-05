@@ -28,13 +28,14 @@ async function fetchMetrics(
   url: string,
   startDate: string,
   endDate: string,
-): Promise<{ metrics: PeriodMetrics | null; error: boolean }> {
+): Promise<{ metrics: PeriodMetrics | null; error: string | null }> {
   try {
     const row = await queryUrlSearchAnalytics(accessToken, gscProperty, url, startDate, endDate);
-    return { metrics: row, error: false };
+    return { metrics: row, error: null };
   } catch (error) {
-    classifyGoogleApiError(error);
-    return { metrics: null, error: true };
+    const kind = classifyGoogleApiError(error);
+    const detail = (error as { message?: string })?.message ?? String(error);
+    return { metrics: null, error: `${kind}: ${detail} (property: ${gscProperty})` };
   }
 }
 
@@ -84,6 +85,7 @@ export async function processRefreshBatch(
         previousStartDate: run.previous_start_date,
         previousEndDate: run.previous_end_date,
         growth: { ...computeGrowth(null, null, true), dataStatus: "error" },
+        errorMessage: `No Search Console property mapped for project "${contentUrl.project}". Set it in Admin → Settings.`,
       });
       failed += 1;
       continue;
@@ -92,7 +94,7 @@ export async function processRefreshBatch(
     const current = await fetchMetrics(accessToken, contentUrl.gsc_property, contentUrl.url, run.start_date, run.end_date);
     const previous = run.previous_start_date && run.previous_end_date
       ? await fetchMetrics(accessToken, contentUrl.gsc_property, contentUrl.url, run.previous_start_date, run.previous_end_date)
-      : { metrics: null, error: false };
+      : { metrics: null, error: null };
 
     if (current.error) {
       await upsertPerformanceCache({
@@ -103,6 +105,7 @@ export async function processRefreshBatch(
         previousStartDate: run.previous_start_date,
         previousEndDate: run.previous_end_date,
         growth: { ...computeGrowth(null, null, true), dataStatus: "error" },
+        errorMessage: current.error,
       });
       failed += 1;
       continue;

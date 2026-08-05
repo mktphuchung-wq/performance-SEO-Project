@@ -4,6 +4,7 @@ import { useState } from "react";
 import { RANGE_LABELS } from "@/lib/format";
 
 const REFRESH_RANGE_OPTIONS = ["current_month", "previous_month", "last_3_months", "last_6_months", "all_time"];
+const ALL_RANGES = "__all__";
 
 interface RefreshRunState {
   id: string;
@@ -19,7 +20,8 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  const [range, setRange] = useState("current_month");
+  const [range, setRange] = useState(ALL_RANGES);
+  const [activeRange, setActiveRange] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [run, setRun] = useState<RefreshRunState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -42,38 +44,48 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     }
   }
 
+  async function refreshRange(rangeKey: string) {
+    const startRes = await fetch("/api/refresh/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rangeKey }),
+    });
+    const startData = await startRes.json();
+    if (!startRes.ok) throw new Error(startData.error ?? "Failed to start refresh");
+
+    let currentRun: RefreshRunState = startData.run;
+    setRun(currentRun);
+
+    while (currentRun.status === "running") {
+      const processRes = await fetch("/api/refresh/process", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refreshRunId: currentRun.id, batchSize: 20 }),
+      });
+      const processData = await processRes.json();
+      if (!processRes.ok) throw new Error(processData.error ?? "Refresh batch failed");
+      currentRun = processData.run;
+      setRun(currentRun);
+    }
+  }
+
   async function handleRefresh() {
     setRefreshing(true);
     setRefreshError(null);
     setRun(null);
+    // Each range is cached independently, so "all ranges" walks them in turn —
+    // otherwise the 3M/6M columns stay empty until they are refreshed too.
+    const targets = range === ALL_RANGES ? REFRESH_RANGE_OPTIONS : [range];
     try {
-      const startRes = await fetch("/api/refresh/start", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rangeKey: range }),
-      });
-      const startData = await startRes.json();
-      if (!startRes.ok) throw new Error(startData.error ?? "Failed to start refresh");
-
-      let currentRun: RefreshRunState = startData.run;
-      setRun(currentRun);
-
-      while (currentRun.status === "running") {
-        const processRes = await fetch("/api/refresh/process", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ refreshRunId: currentRun.id, batchSize: 20 }),
-        });
-        const processData = await processRes.json();
-        if (!processRes.ok) throw new Error(processData.error ?? "Refresh batch failed");
-        currentRun = processData.run;
-        setRun(currentRun);
+      for (const target of targets) {
+        setActiveRange(target);
+        await refreshRange(target);
       }
-
       onDone?.();
     } catch (error) {
       setRefreshError((error as Error).message);
     } finally {
+      setActiveRange(null);
       setRefreshing(false);
     }
   }
@@ -97,7 +109,10 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
 
       <div className="border-t pt-4">
         <h2 className="text-sm font-semibold text-slate-900">Refresh GSC performance</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Fetch Search Console data for all active URLs in a range.</p>
+        <p className="text-xs text-slate-500 mt-0.5">
+          Fetch Search Console data for all active URLs. Each range is cached separately — refresh
+          every range to fill the 1M / 3M / 6M columns.
+        </p>
         <div className="mt-2 flex items-center gap-3 flex-wrap">
           <select
             value={range}
@@ -105,6 +120,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
             className="border rounded-md text-sm px-2 py-1.5"
             disabled={refreshing}
           >
+            <option value={ALL_RANGES}>All ranges</option>
             {REFRESH_RANGE_OPTIONS.map((option) => (
               <option key={option} value={option}>
                 {RANGE_LABELS[option]}
@@ -129,6 +145,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
               />
             </div>
             <div className="text-xs text-slate-500">
+              {activeRange && <span className="font-medium">{RANGE_LABELS[activeRange]}: </span>}
               {run.processed_urls}/{run.total_urls} processed · {run.urls_with_data} with data · {run.no_data_urls} no
               data · {run.failed_urls} failed · status: {run.status}
             </div>

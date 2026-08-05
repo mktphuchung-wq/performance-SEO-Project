@@ -28,8 +28,22 @@ export async function upsertProjectGscProperty(
      on conflict (project) do update set gsc_property = excluded.gsc_property, notes = excluded.notes, updated_at = now()`,
     [project, gscProperty, notes ?? null],
   );
+  // Apply to URLs already synced, so admins don't have to re-sync the Sheet
+  // after fixing a mapping.
+  await query(
+    `update public.content_urls
+       set gsc_property = $2, updated_at = now()
+     where project = $1 and gsc_property is distinct from $2`,
+    [project, gscProperty],
+  );
 }
 
 export async function deleteProjectGscProperty(project: string): Promise<void> {
   await query("delete from public.project_gsc_properties where project = $1", [project]);
+  await query(
+    `update public.content_urls
+       set gsc_property = null, updated_at = now()
+     where project = $1 and gsc_property is not null`,
+    [project],
+  );
 }

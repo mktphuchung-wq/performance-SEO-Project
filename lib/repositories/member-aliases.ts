@@ -29,8 +29,22 @@ export async function upsertMemberAlias(memberName: string, memberEmail: string)
      on conflict (member_name) do update set member_email = excluded.member_email, updated_at = now()`,
     [memberName, memberEmail.toLowerCase()],
   );
+  // Apply to URLs already synced, so admins don't have to re-sync the Sheet
+  // after fixing a mapping.
+  await query(
+    `update public.content_urls
+       set member_email = $2, updated_at = now()
+     where member_name = $1 and member_email is distinct from $2`,
+    [memberName, memberEmail.toLowerCase()],
+  );
 }
 
 export async function deleteMemberAlias(memberName: string): Promise<void> {
   await query("delete from public.member_aliases where member_name = $1", [memberName]);
+  await query(
+    `update public.content_urls
+       set member_email = null, updated_at = now()
+     where member_name = $1 and member_email is not null`,
+    [memberName],
+  );
 }
