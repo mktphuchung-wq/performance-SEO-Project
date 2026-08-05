@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
+import { Card, CardHeader, Field, PageHeader, inputClass } from "@/components/ui";
+import { RANGE_LABELS } from "@/lib/format";
 
 export default function AdminUrlsPage() {
   const [range, setRange] = useState("current_month");
@@ -27,32 +29,43 @@ export default function AdminUrlsPage() {
   }, [range, project, member]);
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-lg font-semibold text-slate-900">URL Data Source</h1>
-        <RangeSwitcher value={range} onChange={setRange} />
-      </div>
+    <div className="mx-auto max-w-7xl space-y-6 px-5 py-6">
+      <PageHeader
+        title="URL data source"
+        description="Every active URL from the sheet with its cached Search Console metrics."
+        action={<RangeSwitcher value={range} onChange={setRange} />}
+      />
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <select value={project} onChange={(e) => setProject(e.target.value)} className="border rounded-md text-sm px-2 py-1.5">
-          <option value="">All projects</option>
-          {projects.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
-        <select value={member} onChange={(e) => setMember(e.target.value)} className="border rounded-md text-sm px-2 py-1.5">
-          <option value="">All members</option>
-          {members.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      </div>
+      <Card>
+        <CardHeader
+          title={`${RANGE_LABELS[range] ?? range} · ${rows.length} URL${rows.length === 1 ? "" : "s"}`}
+        />
 
-      <PerformanceTable rows={rows} showMember />
+        <div className="flex flex-wrap items-end gap-3 border-b border-line px-5 py-4">
+          <Field label="Project">
+            <select value={project} onChange={(e) => setProject(e.target.value)} className={inputClass}>
+              <option value="">All projects</option>
+              {projects.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Member">
+            <select value={member} onChange={(e) => setMember(e.target.value)} className={inputClass}>
+              <option value="">All members</option>
+              {members.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <PerformanceTable rows={rows} showMember />
+      </Card>
     </div>
   );
 }

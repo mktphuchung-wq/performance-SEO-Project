@@ -4,8 +4,19 @@ import { useEffect, useState } from "react";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { StatCard } from "@/components/StatCard";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
-import { formatGrowthPct, formatNumber } from "@/lib/format";
+import { Card, CardHeader, PageHeader } from "@/components/ui";
+import { RANGE_LABELS, formatGrowthPct, formatNumber } from "@/lib/format";
 import type { MemberRollupRow } from "@/lib/repositories/rollups";
+
+function GrowthNote({ value }: { value: number | null | undefined }) {
+  if (value === null || value === undefined) return <>vs. previous period: —</>;
+  const tone = value > 0 ? "text-positive" : value < 0 ? "text-negative" : "text-ink-muted";
+  return (
+    <>
+      <span className={`numeric font-medium ${tone}`}>{formatGrowthPct(value)}</span> vs. previous
+    </>
+  );
+}
 
 export default function DashboardPage() {
   const [range, setRange] = useState("current_month");
@@ -32,30 +43,55 @@ export default function DashboardPage() {
   }, [range]);
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-lg font-semibold text-slate-900">My Performance</h1>
-        <RangeSwitcher
-          value={range}
-          onChange={(next) => {
-            setLoading(true);
-            setRange(next);
-          }}
+    <div className="mx-auto max-w-7xl space-y-6 px-5 py-6">
+      <PageHeader
+        title="My performance"
+        description="URLs assigned to you in the content sheet, measured in Search Console."
+        action={
+          <RangeSwitcher
+            value={range}
+            onChange={(next) => {
+              setLoading(true);
+              setRange(next);
+            }}
+          />
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="URLs"
+          value={rollup ? String(rollup.url_count) : "—"}
+          sub={rollup ? `${rollup.urls_with_data} with data` : undefined}
+        />
+        <StatCard
+          label="Clicks"
+          value={formatNumber(rollup?.clicks)}
+          sub={rollup ? <GrowthNote value={rollup.click_growth_pct} /> : undefined}
+        />
+        <StatCard
+          label="Impressions"
+          value={formatNumber(rollup?.impressions)}
+          sub={rollup ? <GrowthNote value={rollup.impression_growth_pct} /> : undefined}
+        />
+        <StatCard
+          label="Growing / Declining"
+          value={rollup ? `${rollup.growing_urls} / ${rollup.declining_urls}` : "—"}
+          sub={rollup ? `${rollup.no_data_urls} without data` : undefined}
         />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="URLs" value={rollup ? String(rollup.url_count) : "—"} sub={rollup ? `${rollup.urls_with_data} with data` : undefined} />
-        <StatCard label="Clicks" value={formatNumber(rollup?.clicks)} sub={rollup ? formatGrowthPct(rollup.click_growth_pct) : undefined} />
-        <StatCard label="Impressions" value={formatNumber(rollup?.impressions)} sub={rollup ? formatGrowthPct(rollup.impression_growth_pct) : undefined} />
-        <StatCard label="Growing / Declining" value={rollup ? `${rollup.growing_urls} / ${rollup.declining_urls}` : "—"} sub={rollup ? `${rollup.no_data_urls} no data` : undefined} />
-      </div>
-
-      {loading ? (
-        <div className="text-sm text-slate-500 py-8 text-center">Loading…</div>
-      ) : (
-        <PerformanceTable rows={rows} />
-      )}
+      <Card>
+        <CardHeader
+          title="My URLs"
+          description={`${RANGE_LABELS[range] ?? range} — click a URL to see every range side by side.`}
+        />
+        {loading ? (
+          <p className="px-5 py-10 text-center text-sm text-ink-muted">Loading…</p>
+        ) : (
+          <PerformanceTable rows={rows} />
+        )}
+      </Card>
     </div>
   );
 }

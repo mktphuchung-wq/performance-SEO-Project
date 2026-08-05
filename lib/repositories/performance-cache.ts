@@ -152,6 +152,36 @@ export async function getPerformanceForContentUrl(contentUrlId: string): Promise
   );
 }
 
+export interface RangeFreshness {
+  range_key: string;
+  refreshed_at: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  cached_urls: number;
+  ok_urls: number;
+  error_urls: number;
+}
+
+/**
+ * How current each range's cached data is. The dashboard reads Postgres, never
+ * GSC, so this is what tells a user whether what they're looking at is stale
+ * rather than absent.
+ */
+export async function getRangeFreshness(): Promise<RangeFreshness[]> {
+  return query<RangeFreshness>(
+    `select p.range_key,
+            max(p.refreshed_at) as refreshed_at,
+            max(p.start_date) as start_date,
+            max(p.end_date) as end_date,
+            count(*)::int as cached_urls,
+            count(*) filter (where p.data_status = 'ok')::int as ok_urls,
+            count(*) filter (where p.data_status = 'error')::int as error_urls
+     from public.seo_performance_cache p
+     join public.content_urls c on c.id = p.content_url_id and c.is_active = true
+     group by p.range_key`,
+  );
+}
+
 export async function getPerformanceRowsForRange(rangeKey: RangeKey): Promise<
   Array<{
     content_url_id: string;

@@ -11,13 +11,16 @@ export default async function Home() {
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center">
-      <div className="max-w-sm w-full text-center space-y-6 bg-white border rounded-xl p-8 shadow-sm">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900">Performance SEO Project</h1>
-          <p className="text-sm text-slate-500 mt-1">SEO Team internal dashboard</p>
+    <div className="flex flex-1 items-center justify-center px-5 py-12">
+      <div className="w-full max-w-sm space-y-7 rounded-2xl border border-line bg-surface p-8 shadow-[0_4px_16px_rgba(16,24,40,0.06)]">
+        <div className="text-center">
+          <h1 className="text-xl font-medium tracking-tight text-ink">Performance SEO Project</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">SEO team internal dashboard</p>
         </div>
         <SignInButton />
+        <p className="text-center text-[13px] leading-5 text-ink-subtle">
+          Sign in with the Google account that has access to the content sheet and your Search Console properties.
+        </p>
       </div>
     </div>
   );

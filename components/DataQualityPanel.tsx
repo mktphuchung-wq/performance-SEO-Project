@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Card, CardHeader } from "@/components/ui";
 import type { ContentUrl } from "@/lib/repositories/content-urls";
 import type { SyncRun } from "@/lib/repositories/sync-runs";
 import type { RefreshRun } from "@/lib/repositories/refresh-runs";
@@ -13,96 +14,95 @@ interface DataQualityResponse {
   recentRefreshRuns: RefreshRun[];
 }
 
+/** Group by the field that is missing, so the fix is one action per group rather than per URL. */
+function groupBy(urls: ContentUrl[], key: "project" | "member_name"): Array<{ label: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const url of urls) {
+    const label = url[key] || "(blank)";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
+}
+
 export function DataQualityPanel({ refreshKey }: { refreshKey?: number }) {
   const [data, setData] = useState<DataQualityResponse | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/data-quality")
       .then((r) => r.json())
-      .then(setData);
+      .then(setData)
+      .catch(() => setData(null));
   }, [refreshKey]);
 
   if (!data) return null;
 
-  const failedSync = data.recentSyncRuns.filter((r) => r.status === "failed");
-  const failedRefresh = data.recentRefreshRuns.filter((r) => r.status === "failed");
+  const missingProperty = groupBy(data.missingGscProperty, "project");
+  const missingEmail = groupBy(data.missingMemberEmail, "member_name");
+  const allClear = missingProperty.length === 0 && missingEmail.length === 0;
 
   return (
-    <div className="bg-white border rounded-lg p-4 space-y-4">
-      <h2 className="text-sm font-semibold text-slate-900">Data quality</h2>
+    <Card>
+      <CardHeader
+        title="Data quality"
+        description="Anything listed here blocks real numbers — a URL without these mappings can never be measured."
+      />
 
-      <DataQualitySection
-        title={`Projects missing a GSC property (${data.missingGscProperty.length})`}
-        emptyLabel="All active URLs have a mapped GSC property."
-      >
-        {data.missingGscProperty.slice(0, 10).map((url) => (
-          <li key={url.id} className="text-xs text-slate-600">
-            <span className="font-medium">{url.project || "(no project)"}</span> — {url.url}
-          </li>
-        ))}
-        {data.missingGscProperty.length > 0 && (
-          <li className="text-xs">
-            <Link href="/admin/settings" className="text-blue-600 hover:underline">
-              Map projects to GSC properties →
-            </Link>
-          </li>
-        )}
-      </DataQualitySection>
+      <div className="grid gap-5 px-5 py-4 md:grid-cols-2">
+        <Issue
+          title="Projects without a Search Console property"
+          groups={missingProperty}
+          emptyLabel="Every active URL has a mapped property."
+          fixLabel="Map projects →"
+        />
+        <Issue
+          title="Members without an email alias"
+          groups={missingEmail}
+          emptyLabel="Every active URL has a member email."
+          fixLabel="Map members →"
+        />
+      </div>
 
-      <DataQualitySection
-        title={`Members missing an email alias (${data.missingMemberEmail.length})`}
-        emptyLabel="All active URLs have a member email mapped."
-      >
-        {data.missingMemberEmail.slice(0, 10).map((url) => (
-          <li key={url.id} className="text-xs text-slate-600">
-            <span className="font-medium">{url.member_name || "(no member)"}</span> — {url.url}
-          </li>
-        ))}
-        {data.missingMemberEmail.length > 0 && (
-          <li className="text-xs">
-            <Link href="/admin/settings" className="text-blue-600 hover:underline">
-              Map member names to emails →
-            </Link>
-          </li>
-        )}
-      </DataQualitySection>
-
-      <DataQualitySection title={`Failed sync runs (${failedSync.length})`} emptyLabel="No failed sync runs recently.">
-        {failedSync.map((run) => (
-          <li key={run.id} className="text-xs text-red-600">
-            {new Date(run.started_at).toLocaleString()} — {run.error_message}
-          </li>
-        ))}
-      </DataQualitySection>
-
-      <DataQualitySection title={`Failed refresh runs (${failedRefresh.length})`} emptyLabel="No failed refresh runs recently.">
-        {failedRefresh.map((run) => (
-          <li key={run.id} className="text-xs text-red-600">
-            {new Date(run.started_at).toLocaleString()} ({run.range_key}) — {run.error_message}
-          </li>
-        ))}
-      </DataQualitySection>
-    </div>
+      {allClear && (
+        <p className="border-t border-line px-5 py-3 text-[13px] text-positive">
+          All mappings complete — refresh results reflect real Search Console data.
+        </p>
+      )}
+    </Card>
   );
 }
 
-function DataQualitySection({
+function Issue({
   title,
+  groups,
   emptyLabel,
-  children,
+  fixLabel,
 }: {
   title: string;
+  groups: Array<{ label: string; count: number }>;
   emptyLabel: string;
-  children: React.ReactNode;
+  fixLabel: string;
 }) {
-  const hasChildren = Array.isArray(children) ? children.some(Boolean) : Boolean(children);
   return (
     <div>
-      <h3 className="text-xs font-semibold text-slate-700">{title}</h3>
-      {hasChildren ? (
-        <ul className="mt-1 space-y-0.5">{children}</ul>
+      <h3 className="text-[13px] font-medium text-ink">{title}</h3>
+      {groups.length === 0 ? (
+        <p className="mt-1.5 text-[13px] text-ink-subtle">{emptyLabel}</p>
       ) : (
-        <p className="text-xs text-slate-400 mt-1">{emptyLabel}</p>
+        <>
+          <ul className="mt-2 space-y-1">
+            {groups.map((group) => (
+              <li key={group.label} className="flex items-center justify-between gap-3 text-[13px]">
+                <span className="truncate text-ink">{group.label}</span>
+                <span className="numeric shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning">
+                  {group.count} URL{group.count === 1 ? "" : "s"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Link href="/admin/settings" className="mt-2 inline-block text-[13px] font-medium text-accent hover:underline">
+            {fixLabel}
+          </Link>
+        </>
       )}
     </div>
   );

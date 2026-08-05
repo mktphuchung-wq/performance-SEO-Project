@@ -22,6 +22,30 @@ export async function fetchContentUrlSheetRows(accessToken: string): Promise<str
   return (result.data.values ?? []) as string[][];
 }
 
+export interface GscSite {
+  siteUrl: string;
+  permissionLevel: string;
+}
+
+/**
+ * The exact property strings the signed-in account can read. Admins must pick
+ * from these rather than typing one — a domain property (`sc-domain:x.com`)
+ * and a URL-prefix property (`https://x.com/`) are different sites to the API,
+ * and a near-miss only shows up later as a permission_denied on every refresh.
+ */
+export async function listGscSites(accessToken: string): Promise<GscSite[]> {
+  const webmasters = google.webmasters({ version: "v3", auth: authClient(accessToken) });
+  const response = await webmasters.sites.list({});
+
+  return (response.data.siteEntry ?? [])
+    .filter((entry) => Boolean(entry.siteUrl))
+    .map((entry) => ({
+      siteUrl: entry.siteUrl as string,
+      permissionLevel: entry.permissionLevel ?? "unknown",
+    }))
+    .sort((a, b) => a.siteUrl.localeCompare(b.siteUrl));
+}
+
 export interface SearchAnalyticsRow {
   clicks: number;
   impressions: number;

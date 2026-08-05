@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { RANGE_LABELS } from "@/lib/format";
+import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 
 const REFRESH_RANGE_OPTIONS = ["current_month", "previous_month", "last_3_months", "last_6_months", "all_time"];
 const ALL_RANGES = "__all__";
@@ -19,6 +20,7 @@ interface RefreshRunState {
 export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncFailed, setSyncFailed] = useState(false);
 
   const [range, setRange] = useState(ALL_RANGES);
   const [activeRange, setActiveRange] = useState<string | null>(null);
@@ -29,15 +31,17 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   async function handleSync() {
     setSyncing(true);
     setSyncMessage(null);
+    setSyncFailed(false);
     try {
       const res = await fetch("/api/sync/sheet", { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Sync failed");
       setSyncMessage(
-        `Sync complete: ${data.insertedRows} inserted, ${data.updatedRows} updated, ${data.deactivatedRows} deactivated, ${data.failedRows} failed.`,
+        `${data.insertedRows} new · ${data.updatedRows} updated · ${data.deactivatedRows} deactivated · ${data.failedRows} failed`,
       );
       onDone?.();
     } catch (error) {
+      setSyncFailed(true);
       setSyncMessage((error as Error).message);
     } finally {
       setSyncing(false);
@@ -74,7 +78,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     setRefreshError(null);
     setRun(null);
     // Each range is cached independently, so "all ranges" walks them in turn —
-    // otherwise the 3M/6M columns stay empty until they are refreshed too.
+    // otherwise the 3M/6M views stay empty until they are refreshed too.
     const targets = range === ALL_RANGES ? REFRESH_RANGE_OPTIONS : [range];
     try {
       for (const target of targets) {
@@ -90,69 +94,71 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     }
   }
 
+  const progressPct = run?.total_urls ? (run.processed_urls / run.total_urls) * 100 : 0;
+
   return (
-    <div className="bg-white border rounded-lg p-4 space-y-4">
-      <div>
-        <h2 className="text-sm font-semibold text-slate-900">Sync Google Sheet</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Pull the latest content_urls rows into Postgres.</p>
-        <div className="mt-2 flex items-center gap-3">
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="rounded-md bg-slate-900 text-white text-sm px-3 py-1.5 disabled:opacity-50"
-          >
+    <Card>
+      <CardHeader title="Data pipeline" description="Sheet → Postgres → Search Console. Run sync first, then refresh." />
+
+      <div className="grid gap-5 px-5 py-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <h3 className="text-[13px] font-medium text-ink">1 · Sync Google Sheet</h3>
+          <p className="text-[13px] leading-5 text-ink-muted">
+            Pull the latest <code className="rounded bg-neutral-soft px-1 py-0.5">content_urls</code> rows into
+            Postgres.
+          </p>
+          <Button onClick={handleSync} disabled={syncing || refreshing}>
             {syncing ? "Syncing…" : "Sync now"}
-          </button>
-          {syncMessage && <span className="text-xs text-slate-600">{syncMessage}</span>}
-        </div>
-      </div>
-
-      <div className="border-t pt-4">
-        <h2 className="text-sm font-semibold text-slate-900">Refresh GSC performance</h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Fetch Search Console data for all active URLs. Each range is cached separately — refresh
-          every range to fill the 1M / 3M / 6M columns.
-        </p>
-        <div className="mt-2 flex items-center gap-3 flex-wrap">
-          <select
-            value={range}
-            onChange={(e) => setRange(e.target.value)}
-            className="border rounded-md text-sm px-2 py-1.5"
-            disabled={refreshing}
-          >
-            <option value={ALL_RANGES}>All ranges</option>
-            {REFRESH_RANGE_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {RANGE_LABELS[option]}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="rounded-md bg-slate-900 text-white text-sm px-3 py-1.5 disabled:opacity-50"
-          >
-            {refreshing ? "Refreshing…" : "Refresh now"}
-          </button>
+          </Button>
+          {syncMessage && (
+            <p className={`text-[13px] ${syncFailed ? "text-negative" : "text-ink-muted"}`}>{syncMessage}</p>
+          )}
         </div>
 
-        {run && (
-          <div className="mt-3 space-y-1">
-            <div className="w-full bg-slate-100 rounded-full h-2">
-              <div
-                className="bg-slate-900 h-2 rounded-full transition-all"
-                style={{ width: `${run.total_urls ? (run.processed_urls / run.total_urls) * 100 : 0}%` }}
-              />
-            </div>
-            <div className="text-xs text-slate-500">
-              {activeRange && <span className="font-medium">{RANGE_LABELS[activeRange]}: </span>}
-              {run.processed_urls}/{run.total_urls} processed · {run.urls_with_data} with data · {run.no_data_urls} no
-              data · {run.failed_urls} failed · status: {run.status}
-            </div>
+        <div className="space-y-2 md:border-l md:border-line md:pl-5">
+          <h3 className="text-[13px] font-medium text-ink">2 · Refresh Search Console</h3>
+          <p className="text-[13px] leading-5 text-ink-muted">
+            Each range is cached separately — keep <strong>All ranges</strong> to fill the 1M / 3M / 6M views.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Range">
+              <select
+                value={range}
+                onChange={(e) => setRange(e.target.value)}
+                className={inputClass}
+                disabled={refreshing}
+              >
+                <option value={ALL_RANGES}>All ranges</option>
+                {REFRESH_RANGE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {RANGE_LABELS[option]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Button onClick={handleRefresh} disabled={refreshing || syncing}>
+              {refreshing ? "Refreshing…" : "Refresh now"}
+            </Button>
           </div>
-        )}
-        {refreshError && <div className="text-xs text-red-600 mt-2">{refreshError}</div>}
+
+          {run && (
+            <div className="space-y-1.5 pt-1">
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-soft">
+                <div
+                  className="h-full rounded-full bg-accent transition-all"
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+              <div className="numeric text-[13px] text-ink-muted">
+                {activeRange && <span className="font-medium text-ink">{RANGE_LABELS[activeRange]}: </span>}
+                {run.processed_urls}/{run.total_urls} · {run.urls_with_data} with data · {run.no_data_urls} no data ·{" "}
+                <span className={run.failed_urls > 0 ? "text-negative" : undefined}>{run.failed_urls} failed</span>
+              </div>
+            </div>
+          )}
+          {refreshError && <p className="text-[13px] text-negative">{refreshError}</p>}
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
