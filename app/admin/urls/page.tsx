@@ -5,9 +5,10 @@ import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
 import { Card, CardHeader, Field, PageHeader, inputClass } from "@/components/ui";
 import { RANGE_LABELS } from "@/lib/format";
+import { DEFAULT_RANGE_KEY } from "@/lib/ranges";
 
 export default function AdminUrlsPage() {
-  const [range, setRange] = useState("current_month");
+  const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [project, setProject] = useState("");
   const [member, setMember] = useState("");
   const [rows, setRows] = useState<PerformanceTableRow[]>([]);

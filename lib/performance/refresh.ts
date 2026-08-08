@@ -177,6 +177,16 @@ export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: stri
   }
 }
 
+/**
+ * Aggregate counterpart to the per-URL growthPct in ./growth.ts, with the extra
+ * "no previous period at all" case that only exists once rows are combined.
+ */
+function growthPct(previous: number | null, current: number): number | null {
+  if (previous === null) return null;
+  if (previous === 0) return current > 0 ? 100 : null;
+  return ((current - previous) / previous) * 100;
+}
+
 function summarize(rows: Array<{
   clicks: number | null;
   impressions: number | null;
@@ -194,19 +204,25 @@ function summarize(rows: Array<{
   // digits instead of adding them.
   const clicks = okRows.reduce((sum, r) => sum + Number(r.clicks ?? 0), 0);
   const impressions = okRows.reduce((sum, r) => sum + Number(r.impressions ?? 0), 0);
-  const previousClicks = okRows.reduce((sum, r) => sum + Number(r.previous_clicks ?? 0), 0);
-  const previousImpressions = okRows.reduce((sum, r) => sum + Number(r.previous_impressions ?? 0), 0);
   const ctr = impressions > 0 ? clicks / impressions : 0;
   const positionRows = okRows.filter((r) => r.position !== null);
   const position = positionRows.length
     ? positionRows.reduce((sum, r) => sum + Number(r.position ?? 0), 0) / positionRows.length
     : null;
 
-  const clickDelta = clicks - previousClicks;
-  const impressionDelta = impressions - previousImpressions;
-  const clickGrowthPct = previousClicks > 0 ? (clickDelta / previousClicks) * 100 : clicks > 0 ? 100 : null;
-  const impressionGrowthPct =
-    previousImpressions > 0 ? (impressionDelta / previousImpressions) * 100 : impressions > 0 ? 100 : null;
+  // all_time has no previous window, so every row's previous_* is null. Summing
+  // those as 0 would make the delta equal the entire period's clicks and report
+  // "+100%" growth out of nothing. No comparable period means no comparison.
+  const hasPrevious = okRows.some((r) => r.previous_clicks !== null || r.previous_impressions !== null);
+  const previousClicks = hasPrevious ? okRows.reduce((sum, r) => sum + Number(r.previous_clicks ?? 0), 0) : null;
+  const previousImpressions = hasPrevious
+    ? okRows.reduce((sum, r) => sum + Number(r.previous_impressions ?? 0), 0)
+    : null;
+
+  const clickDelta = previousClicks === null ? null : clicks - previousClicks;
+  const impressionDelta = previousImpressions === null ? null : impressions - previousImpressions;
+  const clickGrowthPct = growthPct(previousClicks, clicks);
+  const impressionGrowthPct = growthPct(previousImpressions, impressions);
 
   return {
     urlCount: rows.length,

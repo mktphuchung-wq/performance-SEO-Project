@@ -6,12 +6,15 @@ import { StatCard } from "@/components/StatCard";
 import { SyncRefreshPanel } from "@/components/SyncRefreshPanel";
 import { DataQualityPanel } from "@/components/DataQualityPanel";
 import { RunHistoryPanel } from "@/components/RunHistoryPanel";
+import { MetricDeltaInline } from "@/components/MetricDelta";
 import { PageHeader } from "@/components/ui";
-import { RANGE_LABELS, formatNumber } from "@/lib/format";
+import { RANGE_LABELS, formatCtr, formatNumber } from "@/lib/format";
+import { aggregateRollups } from "@/lib/performance/aggregate";
+import { DEFAULT_RANGE_KEY } from "@/lib/ranges";
 import type { MemberRollupRow, ProjectRollupRow } from "@/lib/repositories/rollups";
 
 export default function AdminOverviewPage() {
-  const [range, setRange] = useState("current_month");
+  const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [members, setMembers] = useState<MemberRollupRow[]>([]);
   const [projects, setProjects] = useState<ProjectRollupRow[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
@@ -26,17 +29,8 @@ export default function AdminOverviewPage() {
     });
   }, [range, dataVersion]);
 
-  const totals = members.reduce(
-    (acc, m) => ({
-      clicks: acc.clicks + Number(m.clicks ?? 0),
-      impressions: acc.impressions + Number(m.impressions ?? 0),
-      urls: acc.urls + Number(m.url_count ?? 0),
-      withData: acc.withData + Number(m.urls_with_data ?? 0),
-      growing: acc.growing + Number(m.growing_urls ?? 0),
-      declining: acc.declining + Number(m.declining_urls ?? 0),
-    }),
-    { clicks: 0, impressions: 0, urls: 0, withData: 0, growing: 0, declining: 0 },
-  );
+  // Members partition every URL, so their rollups sum to the team total.
+  const totals = aggregateRollups(members);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-5 py-6">
@@ -46,21 +40,42 @@ export default function AdminOverviewPage() {
         action={<RangeSwitcher value={range} onChange={setRange} />}
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Members" value={String(members.length)} />
-        <StatCard label="Projects" value={String(projects.length)} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <StatCard
+          label="Clicks"
+          value={formatNumber(totals.clicks)}
+          sub={
+            <MetricDeltaInline
+              delta={totals.clickDelta}
+              pct={totals.clickGrowthPct}
+              previous={totals.previousClicks}
+            />
+          }
+        />
+        <StatCard
+          label="Impressions"
+          value={formatNumber(totals.impressions)}
+          sub={
+            <MetricDeltaInline
+              delta={totals.impressionDelta}
+              pct={totals.impressionGrowthPct}
+              previous={totals.previousImpressions}
+            />
+          }
+        />
+        <StatCard label="CTR" value={formatCtr(totals.ctr)} sub="clicks ÷ impressions" />
+        <StatCard
+          label="Growing / Declining"
+          value={`${totals.growing} / ${totals.declining}`}
+          sub={`${formatNumber(totals.noData)} URLs without data`}
+        />
         <StatCard
           label="URLs"
           value={formatNumber(totals.urls)}
           sub={`${formatNumber(totals.withData)} with data`}
         />
-        <StatCard label="Clicks" value={formatNumber(totals.clicks)} />
-        <StatCard label="Impressions" value={formatNumber(totals.impressions)} />
-        <StatCard
-          label="Growing / Declining"
-          value={`${totals.growing} / ${totals.declining}`}
-          sub="URLs vs. previous period"
-        />
+        <StatCard label="Members" value={String(members.length)} />
+        <StatCard label="Projects" value={String(projects.length)} />
       </div>
 
       <SyncRefreshPanel onDone={() => setDataVersion((v) => v + 1)} />

@@ -4,22 +4,14 @@ import { useEffect, useState } from "react";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { StatCard } from "@/components/StatCard";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
+import { MetricDeltaInline } from "@/components/MetricDelta";
 import { Card, CardHeader, PageHeader } from "@/components/ui";
-import { RANGE_LABELS, formatGrowthPct, formatNumber } from "@/lib/format";
+import { RANGE_LABELS, formatCtr, formatNumber } from "@/lib/format";
+import { DEFAULT_RANGE_KEY } from "@/lib/ranges";
 import type { MemberRollupRow } from "@/lib/repositories/rollups";
 
-function GrowthNote({ value }: { value: number | null | undefined }) {
-  if (value === null || value === undefined) return <>vs. previous period: —</>;
-  const tone = value > 0 ? "text-positive" : value < 0 ? "text-negative" : "text-ink-muted";
-  return (
-    <>
-      <span className={`numeric font-medium ${tone}`}>{formatGrowthPct(value)}</span> vs. previous
-    </>
-  );
-}
-
 export default function DashboardPage() {
-  const [range, setRange] = useState("current_month");
+  const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [rows, setRows] = useState<PerformanceTableRow[]>([]);
   const [rollup, setRollup] = useState<MemberRollupRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,7 +50,7 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard
           label="URLs"
           value={rollup ? String(rollup.url_count) : "—"}
@@ -67,13 +59,30 @@ export default function DashboardPage() {
         <StatCard
           label="Clicks"
           value={formatNumber(rollup?.clicks)}
-          sub={rollup ? <GrowthNote value={rollup.click_growth_pct} /> : undefined}
+          sub={
+            rollup ? (
+              <MetricDeltaInline
+                delta={rollup.click_delta}
+                pct={rollup.click_growth_pct}
+                previous={rollup.previous_clicks}
+              />
+            ) : undefined
+          }
         />
         <StatCard
           label="Impressions"
           value={formatNumber(rollup?.impressions)}
-          sub={rollup ? <GrowthNote value={rollup.impression_growth_pct} /> : undefined}
+          sub={
+            rollup ? (
+              <MetricDeltaInline
+                delta={rollup.impression_delta}
+                pct={rollup.impression_growth_pct}
+                previous={rollup.previous_impressions}
+              />
+            ) : undefined
+          }
         />
+        <StatCard label="CTR" value={formatCtr(rollup?.ctr)} sub={rollup ? "clicks ÷ impressions" : undefined} />
         <StatCard
           label="Growing / Declining"
           value={rollup ? `${rollup.growing_urls} / ${rollup.declining_urls}` : "—"}

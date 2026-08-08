@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { listPerformanceByMemberEmail } from "@/lib/repositories/performance-cache";
-import type { RangeKey } from "@/lib/ranges";
+import { DEFAULT_RANGE_KEY, type RangeKey } from "@/lib/ranges";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -11,7 +11,7 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const rangeKey = (searchParams.get("range") as RangeKey) || "current_month";
+  const rangeKey = (searchParams.get("range") as RangeKey) || DEFAULT_RANGE_KEY;
 
   const rows = await listPerformanceByMemberEmail(session.user.email, rangeKey);
   return NextResponse.json({ rows });

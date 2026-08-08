@@ -14,16 +14,38 @@ export function formatGrowthPct(value: number | null | undefined): string {
   return `${sign}${value.toFixed(1)}%`;
 }
 
+/** Absolute change against the previous period, always signed: "+1,204" / "-56" / "0". */
+export function formatDelta(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const rounded = Math.round(value);
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "−" : "";
+  return `${sign}${new Intl.NumberFormat("en-US").format(Math.abs(rounded))}`;
+}
+
+/** Search Console returns CTR as a 0–1 ratio, not a percentage. */
+export function formatCtr(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
 export function formatPosition(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
   return value.toFixed(1);
 }
 
 export const RANGE_LABELS: Record<string, string> = {
-  current_month: "This month",
-  previous_month: "Previous month",
+  last_1_month: "Last 1 month",
   last_3_months: "Last 3 months",
   last_6_months: "Last 6 months",
+  all_time: "All time",
+  custom: "Custom",
+};
+
+/** Compact labels for tight controls like the range tabs. */
+export const RANGE_SHORT_LABELS: Record<string, string> = {
+  last_1_month: "1M",
+  last_3_months: "3M",
+  last_6_months: "6M",
   all_time: "All time",
   custom: "Custom",
 };

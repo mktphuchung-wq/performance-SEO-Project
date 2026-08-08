@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { RANGE_LABELS } from "@/lib/format";
+import { SELECTABLE_RANGE_KEYS } from "@/lib/ranges";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 
-const REFRESH_RANGE_OPTIONS = ["current_month", "previous_month", "last_3_months", "last_6_months", "all_time"];
 const ALL_RANGES = "__all__";
 
 interface RefreshRunState {
@@ -79,7 +79,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     setRun(null);
     // Each range is cached independently, so "all ranges" walks them in turn —
     // otherwise the 3M/6M views stay empty until they are refreshed too.
-    const targets = range === ALL_RANGES ? REFRESH_RANGE_OPTIONS : [range];
+    const targets = range === ALL_RANGES ? SELECTABLE_RANGE_KEYS : [range];
     try {
       for (const target of targets) {
         setActiveRange(target);
@@ -129,7 +129,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
                 disabled={refreshing}
               >
                 <option value={ALL_RANGES}>All ranges</option>
-                {REFRESH_RANGE_OPTIONS.map((option) => (
+                {SELECTABLE_RANGE_KEYS.map((option) => (
                   <option key={option} value={option}>
                     {RANGE_LABELS[option]}
                   </option>

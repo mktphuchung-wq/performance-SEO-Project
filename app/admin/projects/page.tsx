@@ -5,10 +5,11 @@ import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { ProjectComparisonTable } from "@/components/ProjectComparisonTable";
 import { Card, CardHeader, PageHeader } from "@/components/ui";
 import { RANGE_LABELS } from "@/lib/format";
+import { DEFAULT_RANGE_KEY } from "@/lib/ranges";
 import type { ProjectRollupRow } from "@/lib/repositories/rollups";
 
 export default function AdminProjectsPage() {
-  const [range, setRange] = useState("current_month");
+  const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [rows, setRows] = useState<ProjectRollupRow[]>([]);
 
   useEffect(() => {

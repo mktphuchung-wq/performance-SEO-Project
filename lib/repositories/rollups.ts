@@ -16,11 +16,12 @@ export interface RollupInput {
   impressions: number;
   ctr: number;
   position: number | null;
-  previousClicks: number;
-  previousImpressions: number;
-  clickDelta: number;
+  // Null when the range has no previous period to compare against — not 0.
+  previousClicks: number | null;
+  previousImpressions: number | null;
+  clickDelta: number | null;
   clickGrowthPct: number | null;
-  impressionDelta: number;
+  impressionDelta: number | null;
   impressionGrowthPct: number | null;
 }
 
@@ -134,10 +135,11 @@ export async function upsertProjectRollup(input: RollupInput): Promise<void> {
   );
 }
 
-export interface MemberRollupRow {
-  member_name: string;
-  member_email: string | null;
+/** Columns every rollup table shares; the member/project keys are added on top. */
+export interface RollupMetrics {
   range_key: string;
+  start_date: string;
+  end_date: string;
   url_count: number;
   urls_with_data: number;
   growing_urls: number;
@@ -148,9 +150,18 @@ export interface MemberRollupRow {
   impressions: number;
   ctr: number;
   position: number | null;
+  previous_clicks: number | null;
+  previous_impressions: number | null;
+  click_delta: number | null;
   click_growth_pct: number | null;
+  impression_delta: number | null;
   impression_growth_pct: number | null;
   refreshed_at: string;
+}
+
+export interface MemberRollupRow extends RollupMetrics {
+  member_name: string;
+  member_email: string | null;
 }
 
 export async function listMemberRollups(rangeKey: RangeKey): Promise<MemberRollupRow[]> {
@@ -168,22 +179,8 @@ export async function getMemberRollupByEmail(email: string, rangeKey: RangeKey):
   return rows[0] ?? null;
 }
 
-export interface ProjectRollupRow {
+export interface ProjectRollupRow extends RollupMetrics {
   project: string;
-  range_key: string;
-  url_count: number;
-  urls_with_data: number;
-  growing_urls: number;
-  stable_urls: number;
-  declining_urls: number;
-  no_data_urls: number;
-  clicks: number;
-  impressions: number;
-  ctr: number;
-  position: number | null;
-  click_growth_pct: number | null;
-  impression_growth_pct: number | null;
-  refreshed_at: string;
 }
 
 export async function listProjectRollups(rangeKey: RangeKey): Promise<ProjectRollupRow[]> {

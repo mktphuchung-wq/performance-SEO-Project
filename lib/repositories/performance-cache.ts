@@ -80,6 +80,10 @@ export interface UrlPerformanceRow {
   impressions: number | null;
   ctr: number | null;
   position: number | null;
+  previous_clicks: number | null;
+  previous_impressions: number | null;
+  previous_ctr: number | null;
+  previous_position: number | null;
   click_delta: number | null;
   click_growth_pct: number | null;
   impression_delta: number | null;
@@ -99,6 +103,7 @@ export async function listPerformanceByMemberEmail(email: string, rangeKey: Rang
   return query<UrlPerformanceRow>(
     `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
+            p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type
@@ -126,6 +131,7 @@ export async function listPerformanceAll(rangeKey: RangeKey, filters: { project?
   return query<UrlPerformanceRow>(
     `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
+            p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type
@@ -141,6 +147,7 @@ export async function getPerformanceForContentUrl(contentUrlId: string): Promise
   return query<UrlPerformanceRow>(
     `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
+            p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type

@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { MetricDelta } from "@/components/MetricDelta";
 import { Badge, Card, CardHeader, type BadgeTone } from "@/components/ui";
 import {
   DATA_STATUS_LABELS,
   GROWTH_STATUS_LABELS,
   RANGE_LABELS,
-  formatGrowthPct,
+  formatCtr,
   formatNumber,
   formatPosition,
 } from "@/lib/format";
@@ -123,14 +124,17 @@ export default function UrlDetailPage() {
       <Card>
         <CardHeader title="All ranges" />
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[920px] text-sm">
             <thead>
               <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
                 <th className="px-4 py-2.5">Range</th>
+                <th className="px-4 py-2.5">Window</th>
                 <th className="px-4 py-2.5 text-right">Clicks</th>
+                <th className="px-4 py-2.5 text-right">Δ Clicks</th>
                 <th className="px-4 py-2.5 text-right">Impressions</th>
+                <th className="px-4 py-2.5 text-right">Δ Impressions</th>
+                <th className="px-4 py-2.5 text-right">CTR</th>
                 <th className="px-4 py-2.5 text-right">Avg pos.</th>
-                <th className="px-4 py-2.5 text-right">Click growth</th>
                 <th className="px-4 py-2.5">Growth</th>
                 <th className="px-4 py-2.5">Status</th>
               </tr>
@@ -139,12 +143,29 @@ export default function UrlDetailPage() {
               {rows.map((row) => (
                 <tr key={row.range_key} className="border-b border-line last:border-0">
                   <td className="px-4 py-2.5 font-medium text-ink">{RANGE_LABELS[row.range_key] ?? row.range_key}</td>
-                  <td className="numeric px-4 py-2.5 text-right text-ink">{formatNumber(row.clicks)}</td>
-                  <td className="numeric px-4 py-2.5 text-right text-ink">{formatNumber(row.impressions)}</td>
-                  <td className="numeric px-4 py-2.5 text-right text-ink-muted">{formatPosition(row.position)}</td>
-                  <td className="numeric px-4 py-2.5 text-right text-ink-muted">
-                    {formatGrowthPct(row.click_growth_pct)}
+                  <td className="whitespace-nowrap px-4 py-2.5 text-[13px] text-ink-muted">
+                    {row.start_date} → {row.end_date}
                   </td>
+                  <td className="numeric px-4 py-2.5 text-right text-ink">{formatNumber(row.clicks)}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <MetricDelta
+                      delta={row.click_delta}
+                      pct={row.click_growth_pct}
+                      previous={row.previous_clicks}
+                      dataStatus={row.data_status}
+                    />
+                  </td>
+                  <td className="numeric px-4 py-2.5 text-right text-ink">{formatNumber(row.impressions)}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <MetricDelta
+                      delta={row.impression_delta}
+                      pct={row.impression_growth_pct}
+                      previous={row.previous_impressions}
+                      dataStatus={row.data_status}
+                    />
+                  </td>
+                  <td className="numeric px-4 py-2.5 text-right text-ink-muted">{formatCtr(row.ctr)}</td>
+                  <td className="numeric px-4 py-2.5 text-right text-ink-muted">{formatPosition(row.position)}</td>
                   <td className="px-4 py-2.5">
                     <Badge tone={growthTone[row.growth_status] ?? "neutral"}>
                       {GROWTH_STATUS_LABELS[row.growth_status] ?? row.growth_status}

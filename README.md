@@ -1,9 +1,29 @@
 # Performance SEO Project — SEO Team
 
 Internal dashboard for the SEO team. Tracks which URLs each member worked on (sourced
-from a Google Sheet) and how those URLs perform in Google Search Console, over
-`current_month / previous_month / last_3_months / last_6_months / all_time / custom`
-ranges — per member and per project.
+from a Google Sheet) and how those URLs perform in Google Search Console — per URL,
+then rolled up per member and per project.
+
+## Ranges
+
+`last_1_month / last_3_months / last_6_months / all_time / custom`.
+
+1M, 3M and 6M are **rolling windows** ending at the latest date Search Console has
+data for (today minus a 3-day reporting lag), each compared against the window of
+equal length immediately before it. They share one shape, so a growth number means
+the same thing whichever range you are looking at:
+
+```
+last_3_months:   [ previous 3 months ][ last 3 months → today-3d ]
+                   ^ baseline           ^ what you see
+```
+
+`all_time` has no preceding window, so it reports no growth at all — its deltas are
+`null`, never `0`.
+
+Every metric is reported two ways against that baseline: the **absolute change**
+(`+1,204` clicks) and the **percentage change** (`+18.3%`). Either alone misleads —
+`+300%` hides a 1 → 4 move, and `+1,204` hides whether that is a blip or a doubling.
 
 KPI scoring (Quantity / Quality / Final KPI) is intentionally **not** part of this
 version; it's deferred until Quality has a defined measurement process and Admin-configurable
@@ -21,9 +41,20 @@ via `pg`, Google Sheets + Search Console APIs via `googleapis`, Recharts.
 - GSC is read-only.
 - Members see only their own URLs; Admins see everything.
 - **No Data ≠ 0** and **Missing range ≠ 0** — the cache distinguishes `ok / no_data / not_eligible / error`
-  via `data_status`, and `null` metrics are never coerced to `0` in the UI.
+  via `data_status`, and `null` metrics are never coerced to `0` in the UI. This holds in the
+  rollups too: a range with no previous window stores `null` deltas, not `0`.
 - A URL gaining data with no prior-period baseline is recorded as `new_signal` (positive), not as a decline.
 - Migrations only ever add — never run destructive migrations against production data.
+
+  Because of that rule, replacing the calendar-month ranges left their cached rows behind.
+  Nothing reads them. To reclaim the space, run this by hand once (cache only — every value
+  is recomputable with a refresh):
+
+  ```sql
+  delete from public.seo_performance_cache      where range_key in ('current_month', 'previous_month');
+  delete from public.member_performance_rollup  where range_key in ('current_month', 'previous_month');
+  delete from public.project_performance_rollup where range_key in ('current_month', 'previous_month');
+  ```
 
 ## Setup
 

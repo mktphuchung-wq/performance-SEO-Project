@@ -1,13 +1,22 @@
-export type RangeKey = "current_month" | "previous_month" | "last_3_months" | "last_6_months" | "all_time" | "custom";
+export type RangeKey = "last_1_month" | "last_3_months" | "last_6_months" | "all_time" | "custom";
 
-export const RANGE_KEYS: RangeKey[] = [
-  "current_month",
-  "previous_month",
-  "last_3_months",
-  "last_6_months",
-  "all_time",
-  "custom",
-];
+export const RANGE_KEYS: RangeKey[] = ["last_1_month", "last_3_months", "last_6_months", "all_time", "custom"];
+
+/**
+ * The ranges a user can pick and a refresh can fill. `custom` is excluded: it
+ * has no fixed window, so it is only ever computed on demand.
+ */
+export const SELECTABLE_RANGE_KEYS: RangeKey[] = ["last_1_month", "last_3_months", "last_6_months", "all_time"];
+
+/** What every page and API route falls back to when no range is given. */
+export const DEFAULT_RANGE_KEY: RangeKey = "last_1_month";
+
+/** Rolling windows, in months, keyed by range. */
+const ROLLING_MONTHS: Partial<Record<RangeKey, number>> = {
+  last_1_month: 1,
+  last_3_months: 3,
+  last_6_months: 6,
+};
 
 export interface RangeDates {
   rangeKey: RangeKey;
@@ -35,11 +44,6 @@ function addMonths(iso: string, months: number): string {
   return toIso(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, date.getUTCDate())));
 }
 
-function startOfMonth(iso: string): string {
-  const date = new Date(`${iso}T00:00:00.000Z`);
-  return toIso(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)));
-}
-
 function dataCutoff(): string {
   return addDays(toIso(new Date()), -GSC_DATA_LAG_DAYS);
 }
@@ -57,27 +61,13 @@ function previousPeriodOf(startDate: string, endDate: string): { previousStartDa
 export function computeRangeDates(rangeKey: RangeKey, custom?: { startDate: string; endDate: string }): RangeDates {
   const cutoff = dataCutoff();
 
-  if (rangeKey === "current_month") {
-    const startDate = startOfMonth(cutoff);
+  const months = ROLLING_MONTHS[rangeKey];
+  if (months) {
+    // Rolling window ending at the latest date Search Console has data for,
+    // compared against the window of equal length immediately before it. 1M/3M/6M
+    // all share this shape so their growth numbers mean the same thing.
     const endDate = cutoff;
-    return { rangeKey, startDate, endDate, ...previousPeriodOf(startDate, endDate) };
-  }
-
-  if (rangeKey === "previous_month") {
-    const endDate = addDays(startOfMonth(cutoff), -1);
-    const startDate = startOfMonth(endDate);
-    return { rangeKey, startDate, endDate, ...previousPeriodOf(startDate, endDate) };
-  }
-
-  if (rangeKey === "last_3_months") {
-    const endDate = cutoff;
-    const startDate = addMonths(endDate, -3);
-    return { rangeKey, startDate, endDate, ...previousPeriodOf(startDate, endDate) };
-  }
-
-  if (rangeKey === "last_6_months") {
-    const endDate = cutoff;
-    const startDate = addMonths(endDate, -6);
+    const startDate = addMonths(endDate, -months);
     return { rangeKey, startDate, endDate, ...previousPeriodOf(startDate, endDate) };
   }
 

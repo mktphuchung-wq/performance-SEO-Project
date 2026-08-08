@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Card, CardHeader, type BadgeTone } from "@/components/ui";
 import { RANGE_LABELS, formatNumber } from "@/lib/format";
+import { SELECTABLE_RANGE_KEYS } from "@/lib/ranges";
 import type { SyncRun } from "@/lib/repositories/sync-runs";
 import type { RefreshRun } from "@/lib/repositories/refresh-runs";
 import type { RangeFreshness } from "@/lib/repositories/performance-cache";
@@ -47,7 +48,6 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
   if (!data) return null;
 
   const freshnessByRange = new Map(data.freshness.map((f) => [f.range_key, f]));
-  const ranges = ["current_month", "previous_month", "last_3_months", "last_6_months", "all_time"];
 
   return (
     <div className="space-y-6">
@@ -69,7 +69,7 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
               </tr>
             </thead>
             <tbody>
-              {ranges.map((rangeKey) => {
+              {SELECTABLE_RANGE_KEYS.map((rangeKey) => {
                 const row = freshnessByRange.get(rangeKey);
                 return (
                   <tr key={rangeKey} className="border-b border-line last:border-0">
