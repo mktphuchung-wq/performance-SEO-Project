@@ -33,6 +33,25 @@ export function formatPosition(value: number | null | undefined): string {
   return value.toFixed(1);
 }
 
+/** KPI score is a 0–100 band; a member with nothing scoreable shows "—", not 0. */
+export function formatScore(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return Math.round(value).toString();
+}
+
+export const SCORE_STATE_LABELS: Record<string, string> = {
+  normal: "Scored",
+  new_grace: "New (grace period)",
+  excluded: "Excluded",
+  no_data: "No data",
+};
+
+export const PROJECT_TYPE_LABELS: Record<string, string> = {
+  new: "New",
+  growth: "Growth",
+  stable: "Stable",
+};
+
 export const RANGE_LABELS: Record<string, string> = {
   last_1_month: "Last 1 month",
   last_3_months: "Last 3 months",

@@ -8,26 +8,42 @@ import { DataQualityPanel } from "@/components/DataQualityPanel";
 import { RunHistoryPanel } from "@/components/RunHistoryPanel";
 import { MetricDeltaInline } from "@/components/MetricDelta";
 import { PageHeader } from "@/components/ui";
-import { RANGE_LABELS, formatCtr, formatNumber } from "@/lib/format";
+import { RANGE_LABELS, formatCtr, formatNumber, formatScore } from "@/lib/format";
 import { aggregateRollups } from "@/lib/performance/aggregate";
-import { DEFAULT_RANGE_KEY } from "@/lib/ranges";
+import { DEFAULT_RANGE_KEY, isRollingRange, type RangeKey } from "@/lib/ranges";
 import type { MemberRollupRow, ProjectRollupRow } from "@/lib/repositories/rollups";
+import type { MemberScoreRow } from "@/lib/repositories/kpi-score-rollups";
 
 export default function AdminOverviewPage() {
   const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [members, setMembers] = useState<MemberRollupRow[]>([]);
   const [projects, setProjects] = useState<ProjectRollupRow[]>([]);
+  const [scores, setScores] = useState<MemberScoreRow[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
+
+  const scoreable = isRollingRange(range as RangeKey);
 
   useEffect(() => {
     Promise.all([
       fetch(`/api/admin/members?range=${range}`).then((r) => r.json()),
       fetch(`/api/admin/projects?range=${range}`).then((r) => r.json()),
-    ]).then(([membersRes, projectsRes]) => {
+      fetch(`/api/admin/kpi/members?range=${range}`)
+        .then((r) => r.json())
+        .catch(() => ({ rows: [] })),
+    ]).then(([membersRes, projectsRes, scoresRes]) => {
       setMembers(membersRes.rows ?? []);
       setProjects(projectsRes.rows ?? []);
+      setScores(scoresRes.rows ?? []);
     });
   }, [range, dataVersion]);
+
+  // Members with no eligible URL carry a null score; they are left out of the
+  // average rather than folded in as 0, which would drag the team down for work
+  // that simply has not become measurable yet.
+  const scored = scores.filter((s) => s.kpi_score !== null);
+  const avgKpiScore = scored.length
+    ? scored.reduce((sum, s) => sum + Number(s.kpi_score), 0) / scored.length
+    : null;
 
   // Members partition every URL, so their rollups sum to the team total.
   const totals = aggregateRollups(members);
@@ -41,6 +57,15 @@ export default function AdminOverviewPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <StatCard
+          label="Avg KPI score"
+          value={scoreable ? formatScore(avgKpiScore) : "—"}
+          sub={
+            scoreable
+              ? `${scored.length} of ${scores.length} members scored`
+              : `${RANGE_LABELS[range] ?? range} is not scored`
+          }
+        />
         <StatCard
           label="Clicks"
           value={formatNumber(totals.clicks)}

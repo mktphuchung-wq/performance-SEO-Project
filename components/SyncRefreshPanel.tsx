@@ -28,6 +28,28 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [run, setRun] = useState<RefreshRunState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
+  const [recomputing, setRecomputing] = useState(false);
+  const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
+  const [recomputeFailed, setRecomputeFailed] = useState(false);
+
+  async function handleRecompute() {
+    setRecomputing(true);
+    setRecomputeMessage(null);
+    setRecomputeFailed(false);
+    try {
+      const res = await fetch("/api/admin/kpi/recompute", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Recompute failed");
+      setRecomputeMessage(`Rescored ${(data.recomputed ?? []).length} range(s) from cache.`);
+      onDone?.();
+    } catch (error) {
+      setRecomputeFailed(true);
+      setRecomputeMessage((error as Error).message);
+    } finally {
+      setRecomputing(false);
+    }
+  }
+
   async function handleSync() {
     setSyncing(true);
     setSyncMessage(null);
@@ -158,6 +180,20 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
           )}
           {refreshError && <p className="text-[13px] text-negative">{refreshError}</p>}
         </div>
+      </div>
+
+      <div className="space-y-2 border-t border-line px-5 py-4">
+        <h3 className="text-[13px] font-medium text-ink">3 · Recompute KPI scores</h3>
+        <p className="text-[13px] leading-5 text-ink-muted">
+          Regrades the 1M / 3M / 6M ranges from data already in Postgres — no Search Console calls, so it costs no
+          quota. Use after changing a project type, excluding a URL, or editing KPI settings.
+        </p>
+        <Button variant="secondary" onClick={handleRecompute} disabled={recomputing || syncing || refreshing}>
+          {recomputing ? "Recomputing…" : "Recompute scores"}
+        </Button>
+        {recomputeMessage && (
+          <p className={`text-[13px] ${recomputeFailed ? "text-negative" : "text-ink-muted"}`}>{recomputeMessage}</p>
+        )}
       </div>
     </Card>
   );

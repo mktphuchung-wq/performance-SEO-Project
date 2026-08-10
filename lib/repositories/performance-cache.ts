@@ -97,6 +97,8 @@ export interface UrlPerformanceRow {
   member_name: string;
   member_email: string | null;
   work_type: string;
+  kpi_excluded: boolean;
+  kpi_excluded_reason: string | null;
 }
 
 export async function listPerformanceByMemberEmail(email: string, rangeKey: RangeKey): Promise<UrlPerformanceRow[]> {
@@ -106,7 +108,8 @@ export async function listPerformanceByMemberEmail(email: string, rangeKey: Rang
             p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
-            c.project, c.url, c.member_name, c.member_email, c.work_type
+            c.project, c.url, c.member_name, c.member_email, c.work_type,
+            c.kpi_excluded, c.kpi_excluded_reason
      from public.content_urls c
      join public.seo_performance_cache p on p.content_url_id = c.id and p.range_key = $2
      where c.is_active = true and lower(c.member_email) = lower($1)
@@ -134,7 +137,8 @@ export async function listPerformanceAll(rangeKey: RangeKey, filters: { project?
             p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
-            c.project, c.url, c.member_name, c.member_email, c.work_type
+            c.project, c.url, c.member_name, c.member_email, c.work_type,
+            c.kpi_excluded, c.kpi_excluded_reason
      from public.content_urls c
      join public.seo_performance_cache p on p.content_url_id = c.id
      where ${conditions.join(" and ")}
@@ -150,7 +154,8 @@ export async function getPerformanceForContentUrl(contentUrlId: string): Promise
             p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
-            c.project, c.url, c.member_name, c.member_email, c.work_type
+            c.project, c.url, c.member_name, c.member_email, c.work_type,
+            c.kpi_excluded, c.kpi_excluded_reason
      from public.seo_performance_cache p
      join public.content_urls c on c.id = p.content_url_id
      where p.content_url_id = $1

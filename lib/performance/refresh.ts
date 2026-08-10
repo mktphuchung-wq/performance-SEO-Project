@@ -1,11 +1,15 @@
 import { classifyGoogleApiError, queryUrlSearchAnalytics } from "@/lib/google";
 import { computeGrowth, type PeriodMetrics } from "@/lib/performance/growth";
+import { aggregateScore, computeUrlScore } from "@/lib/performance/score";
 import { listContentUrlsByIds, listActiveContentUrls, type ContentUrl } from "@/lib/repositories/content-urls";
 import { upsertPerformanceCache } from "@/lib/repositories/performance-cache";
 import { advanceRefreshRun, createRefreshRun, finishRefreshRun, getRefreshRun, type RefreshRun } from "@/lib/repositories/refresh-runs";
 import { getPerformanceRowsForRange } from "@/lib/repositories/performance-cache";
+import { getKpiSettings } from "@/lib/repositories/kpi-settings";
+import { upsertMemberScore, upsertProjectScore } from "@/lib/repositories/kpi-score-rollups";
+import { getScoringInputRowsForRange, upsertUrlPerformanceScore } from "@/lib/repositories/url-performance-score";
 import { upsertMemberRollup, upsertProjectRollup } from "@/lib/repositories/rollups";
-import { computeRangeDates, type RangeKey } from "@/lib/ranges";
+import { computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
 
 export async function startRefresh(
   triggeredBy: string | null,
@@ -133,7 +137,13 @@ export async function processRefreshBatch(
 
 async function maybeFinishRun(run: RefreshRun): Promise<void> {
   if (run.status === "running" && run.pending_content_url_ids.length === 0) {
-    await computeAndStoreRollups(run.range_key as RangeKey, run.start_date, run.end_date);
+    const rangeKey = run.range_key as RangeKey;
+    await computeAndStoreRollups(rangeKey, run.start_date, run.end_date);
+    // KPI is a growth measure, so it only exists where a previous period does.
+    // all_time and custom are skipped outright rather than scored against nothing.
+    if (isRollingRange(rangeKey)) {
+      await computeAndStoreScores(rangeKey, run.start_date, run.end_date);
+    }
     await finishRefreshRun(run.id, "success");
   }
 }
@@ -174,6 +184,79 @@ export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: stri
       endDate,
       ...summary,
     });
+  }
+}
+
+/**
+ * Grade an already-refreshed range and roll the scores up to member and project.
+ *
+ * Reads only from seo_performance_cache — no Search Console calls — so it is
+ * safe to re-run on demand after an admin changes a project type, excludes a
+ * URL, or retunes kpi_settings, without spending API quota.
+ */
+export async function computeAndStoreScores(rangeKey: RangeKey, startDate: string, endDate: string): Promise<void> {
+  const settings = await getKpiSettings();
+  const rows = await getScoringInputRowsForRange(rangeKey);
+
+  const scored = rows.map((row) => ({
+    row,
+    result: computeUrlScore(
+      {
+        projectType: row.project_type,
+        dataStatus: row.data_status,
+        growthStatus: row.growth_status,
+        kpiExcluded: row.kpi_excluded,
+        workedAt: row.worked_at,
+        endDate,
+        previousEndDate: row.previous_end_date,
+        clickGrowthPct: row.click_growth_pct,
+        impressionGrowthPct: row.impression_growth_pct,
+        currentImpressions: row.current_impressions,
+        previousImpressions: row.previous_impressions,
+      },
+      settings,
+    ),
+  }));
+
+  for (const { row, result } of scored) {
+    await upsertUrlPerformanceScore({
+      contentUrlId: row.content_url_id,
+      rangeKey,
+      startDate,
+      endDate,
+      projectType: row.project_type,
+      clickGrowthPct: row.click_growth_pct,
+      impressionGrowthPct: row.impression_growth_pct,
+      result,
+    });
+  }
+
+  const byMember = new Map<string, typeof scored>();
+  const byProject = new Map<string, typeof scored>();
+  for (const item of scored) {
+    const memberKey = item.row.member_name || "(unassigned)";
+    const projectKey = item.row.project || "(unassigned)";
+    if (!byMember.has(memberKey)) byMember.set(memberKey, []);
+    if (!byProject.has(projectKey)) byProject.set(projectKey, []);
+    byMember.get(memberKey)!.push(item);
+    byProject.get(projectKey)!.push(item);
+  }
+
+  for (const [memberName, items] of byMember) {
+    const aggregate = aggregateScore(
+      items.map((i) => i.result),
+      settings.urlWeightCapPct,
+    );
+    const email = items.find((i) => i.row.member_email)?.row.member_email ?? null;
+    await upsertMemberScore(email, { key: memberName, rangeKey, startDate, endDate, ...aggregate });
+  }
+
+  for (const [project, items] of byProject) {
+    const aggregate = aggregateScore(
+      items.map((i) => i.result),
+      settings.urlWeightCapPct,
+    );
+    await upsertProjectScore({ key: project, rangeKey, startDate, endDate, ...aggregate });
   }
 }
 

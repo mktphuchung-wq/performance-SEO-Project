@@ -25,9 +25,33 @@ Every metric is reported two ways against that baseline: the **absolute change**
 (`+1,204` clicks) and the **percentage change** (`+18.3%`). Either alone misleads —
 `+300%` hides a 1 → 4 move, and `+1,204` hides whether that is a blip or a doubling.
 
-KPI scoring (Quantity / Quality / Final KPI) is intentionally **not** part of this
-version; it's deferred until Quality has a defined measurement process and Admin-configurable
-weighting is designed. This version focuses on accurate Performance measurement only.
+## Performance Score (KPI)
+
+A 0–100 score is computed per Member and per Project from Clicks/Impressions growth,
+scoped to `last_1_month` / `last_3_months` / `last_6_months` — the ranges with a
+comparable previous period. `all_time` and `custom` are not scored at all.
+
+Three things keep the number honest:
+
+- **New URLs are not graded as flat.** A URL with no previous-period baseline sits
+  out during a grace period instead of being scored as if it had stalled. It becomes
+  scoreable on its own once the cache has a period to compare against. A URL first
+  worked *after* the comparison window closed is always treated as new, whatever the
+  configured grace — no fixed day count can cover a shortfall that scales with the
+  range length.
+- **A spike cannot buy a high score.** Per-URL growth is clamped into 0–100 before
+  aggregation, so `1 → 10 clicks` (+900%) tops out at the same 100 as a URL that grew
+  reliably.
+- **Small URLs cannot swing the total.** Aggregation weights by average impressions
+  across both periods and caps how much of the total weight any single URL may carry.
+
+`kpi_score` is `null` — never `0` — when a member or project has no eligible URL.
+See `lib/performance/score.ts`. Coefficients, weighting, the grace period, and the
+per-URL cap are Admin-configurable under **Admin → Settings**; **Admin → Overview**
+has a *Recompute scores* action that re-grades from cached data without spending
+Search Console quota.
+
+A **Quality** dimension is still deferred.
 
 ## Stack
 

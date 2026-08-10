@@ -11,6 +11,9 @@ export interface ContentUrl {
   gsc_property: string | null;
   is_active: boolean;
   worked_at: string | null;
+  kpi_excluded: boolean;
+  kpi_excluded_reason: string | null;
+  kpi_excluded_at: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }
@@ -59,6 +62,23 @@ export async function upsertContentUrl(input: UpsertContentUrlInput): Promise<{ 
   );
   if (!row) throw new Error("Failed to upsert content_url");
   return row;
+}
+
+/**
+ * Manually take a URL in or out of KPI scoring. Deliberately manual — there is
+ * no automatic seasonality detection; an admin decides that a holiday page is
+ * far enough out of season to stop counting against its owner.
+ */
+export async function setKpiExclusion(id: string, excluded: boolean, reason: string | null): Promise<void> {
+  await query(
+    `update public.content_urls
+     set kpi_excluded = $2,
+         kpi_excluded_reason = case when $2 then $3 else null end,
+         kpi_excluded_at = case when $2 then now() else null end,
+         updated_at = now()
+     where id = $1`,
+    [id, excluded, reason],
+  );
 }
 
 export async function deactivateMissingContentUrls(seenHashes: string[]): Promise<number> {

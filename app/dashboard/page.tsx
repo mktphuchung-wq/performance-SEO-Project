@@ -6,15 +6,19 @@ import { StatCard } from "@/components/StatCard";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
 import { MetricDeltaInline } from "@/components/MetricDelta";
 import { Card, CardHeader, PageHeader } from "@/components/ui";
-import { RANGE_LABELS, formatCtr, formatNumber } from "@/lib/format";
-import { DEFAULT_RANGE_KEY } from "@/lib/ranges";
+import { RANGE_LABELS, formatCtr, formatNumber, formatScore } from "@/lib/format";
+import { DEFAULT_RANGE_KEY, isRollingRange, type RangeKey } from "@/lib/ranges";
 import type { MemberRollupRow } from "@/lib/repositories/rollups";
+import type { MemberScoreRow } from "@/lib/repositories/kpi-score-rollups";
 
 export default function DashboardPage() {
   const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [rows, setRows] = useState<PerformanceTableRow[]>([]);
   const [rollup, setRollup] = useState<MemberRollupRow | null>(null);
+  const [score, setScore] = useState<MemberScoreRow | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const scoreable = isRollingRange(range as RangeKey);
 
   useEffect(() => {
     let cancelled = false;
@@ -22,10 +26,14 @@ export default function DashboardPage() {
     Promise.all([
       fetch(`/api/me/urls?range=${range}`).then((r) => r.json()),
       fetch(`/api/me/performance?range=${range}`).then((r) => r.json()),
-    ]).then(([urlsRes, perfRes]) => {
+      fetch(`/api/me/kpi?range=${range}`)
+        .then((r) => r.json())
+        .catch(() => ({ score: null })),
+    ]).then(([urlsRes, perfRes, kpiRes]) => {
       if (cancelled) return;
       setRows(urlsRes.rows ?? []);
       setRollup(perfRes.rollup ?? null);
+      setScore(kpiRes.score ?? null);
       setLoading(false);
     });
 
@@ -50,7 +58,20 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <StatCard
+          label="KPI score"
+          value={scoreable ? formatScore(score?.kpi_score) : "—"}
+          sub={
+            !scoreable ? (
+              `${RANGE_LABELS[range] ?? range} is not scored`
+            ) : score ? (
+              `${score.normal_url_count} scored · ${score.new_grace_url_count} new · ${score.excluded_url_count} excluded`
+            ) : (
+              "No eligible URL yet"
+            )
+          }
+        />
         <StatCard
           label="URLs"
           value={rollup ? String(rollup.url_count) : "—"}

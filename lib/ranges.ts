@@ -18,6 +18,15 @@ const ROLLING_MONTHS: Partial<Record<RangeKey, number>> = {
   last_6_months: 6,
 };
 
+/**
+ * True for ranges that have a preceding window to compare against (1M/3M/6M),
+ * false for all_time and custom. KPI scoring is defined only where growth is,
+ * so this is what gates it.
+ */
+export function isRollingRange(rangeKey: RangeKey): boolean {
+  return ROLLING_MONTHS[rangeKey] !== undefined;
+}
+
 export interface RangeDates {
   rangeKey: RangeKey;
   startDate: string;

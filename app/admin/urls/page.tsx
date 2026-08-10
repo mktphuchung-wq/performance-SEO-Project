@@ -15,6 +15,9 @@ export default function AdminUrlsPage() {
   const [projects, setProjects] = useState<string[]>([]);
   const [members, setMembers] = useState<string[]>([]);
 
+  const [dataVersion, setDataVersion] = useState(0);
+  const [kpiError, setKpiError] = useState<string | null>(null);
+
   useEffect(() => {
     const params = new URLSearchParams({ range });
     if (project) params.set("project", project);
@@ -27,7 +30,29 @@ export default function AdminUrlsPage() {
         setProjects(data.projects ?? []);
         setMembers(data.members ?? []);
       });
-  }, [range, project, member]);
+  }, [range, project, member, dataVersion]);
+
+  async function toggleKpiExclusion(row: PerformanceTableRow) {
+    const excluding = !row.kpi_excluded;
+    // Excluding a URL is a judgement call someone else will have to understand
+    // later, so it carries a reason. Re-including clears it.
+    const reason = excluding ? window.prompt("Why is this URL excluded from KPI?", "Seasonal — out of season") : null;
+    if (excluding && reason === null) return; // cancelled
+
+    setKpiError(null);
+    try {
+      const res = await fetch(`/api/admin/urls/${row.content_url_id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kpiExcluded: excluding, reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not update KPI exclusion");
+      setDataVersion((v) => v + 1);
+    } catch (error) {
+      setKpiError((error as Error).message);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-5 py-6">
@@ -65,7 +90,12 @@ export default function AdminUrlsPage() {
           </Field>
         </div>
 
-        <PerformanceTable rows={rows} showMember />
+        {kpiError && <p className="px-5 pt-3 text-[13px] text-negative">{kpiError}</p>}
+        <PerformanceTable rows={rows} showMember onToggleKpiExclusion={toggleKpiExclusion} />
+        <p className="border-t border-line px-5 py-3 text-[13px] text-ink-muted">
+          Excluding a URL takes it out of KPI scoring entirely. Run <strong>Recompute scores</strong> in Admin →
+          Overview to apply the change.
+        </p>
       </Card>
     </div>
   );

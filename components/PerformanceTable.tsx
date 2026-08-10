@@ -24,6 +24,8 @@ export interface PerformanceTableRow {
   data_status: string;
   growth_status: string;
   error_message?: string | null;
+  kpi_excluded?: boolean;
+  kpi_excluded_reason?: string | null;
 }
 
 const statusTone: Record<string, BadgeTone> = {
@@ -43,7 +45,16 @@ function shortenUrl(url: string): string {
   }
 }
 
-export function PerformanceTable({ rows, showMember = false }: { rows: PerformanceTableRow[]; showMember?: boolean }) {
+export function PerformanceTable({
+  rows,
+  showMember = false,
+  onToggleKpiExclusion,
+}: {
+  rows: PerformanceTableRow[];
+  showMember?: boolean;
+  /** Supplied only by the admin view — its presence is what adds the KPI column. */
+  onToggleKpiExclusion?: (row: PerformanceTableRow) => void;
+}) {
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -69,6 +80,7 @@ export function PerformanceTable({ rows, showMember = false }: { rows: Performan
             <th className="px-4 py-2.5 text-right">CTR</th>
             <th className="px-4 py-2.5 text-right">Avg pos.</th>
             <th className="px-4 py-2.5">Status</th>
+            {onToggleKpiExclusion && <th className="px-4 py-2.5">KPI</th>}
           </tr>
         </thead>
         <tbody>
@@ -116,6 +128,28 @@ export function PerformanceTable({ rows, showMember = false }: { rows: Performan
                   <p className="mt-1 max-w-[240px] text-xs leading-4 text-negative">{row.error_message}</p>
                 )}
               </td>
+              {onToggleKpiExclusion && (
+                <td className="px-4 py-2.5">
+                  <div className="flex flex-col items-start gap-1">
+                    {row.kpi_excluded ? (
+                      <Badge tone="warning">Excluded</Badge>
+                    ) : (
+                      <Badge tone="neutral">Counted</Badge>
+                    )}
+                    <button
+                      onClick={() => onToggleKpiExclusion(row)}
+                      className="text-xs font-medium text-accent hover:underline"
+                    >
+                      {row.kpi_excluded ? "Include" : "Exclude"}
+                    </button>
+                    {row.kpi_excluded_reason && (
+                      <span className="max-w-[160px] text-xs leading-4 text-ink-subtle">
+                        {row.kpi_excluded_reason}
+                      </span>
+                    )}
+                  </div>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

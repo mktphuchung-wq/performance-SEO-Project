@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { Badge, Button, Card, CardHeader, Field, PageHeader, inputClass } from "@/components/ui";
+import { PROJECT_TYPE_LABELS } from "@/lib/format";
 
 interface MemberAlias {
   member_name: string;
@@ -13,7 +14,28 @@ interface ProjectGscProperty {
   project: string;
   gsc_property: string;
   notes: string | null;
+  project_type: string;
 }
+
+interface KpiSettingsRow {
+  coefficient_new: number;
+  coefficient_growth: number;
+  coefficient_stable: number;
+  new_url_grace_days: number;
+  click_weight: number;
+  impression_weight: number;
+  url_weight_cap_pct: number;
+}
+
+const KPI_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string; step: string }> = [
+  { key: "coefficient_new", label: "Coefficient · New", hint: "Growth band for New projects", step: "0.1" },
+  { key: "coefficient_growth", label: "Coefficient · Growth", hint: "1.0 → ±50% growth hits 100/0", step: "0.1" },
+  { key: "coefficient_stable", label: "Coefficient · Stable", hint: "0.3 → ±15% growth hits 100/0", step: "0.1" },
+  { key: "new_url_grace_days", label: "New URL grace (days)", hint: "Days a new URL sits out of scoring", step: "1" },
+  { key: "click_weight", label: "Click weight", hint: "Must add up to 1 with impression weight", step: "0.05" },
+  { key: "impression_weight", label: "Impression weight", hint: "Must add up to 1 with click weight", step: "0.05" },
+  { key: "url_weight_cap_pct", label: "URL weight cap (%)", hint: "Max share one URL can take", step: "1" },
+];
 
 interface GscSite {
   siteUrl: string;
@@ -31,6 +53,13 @@ export default function AdminSettingsPage() {
   const [projectNames, setProjectNames] = useState<string[]>([]);
   const [propProject, setPropProject] = useState("");
   const [propGscProperty, setPropGscProperty] = useState("");
+  const [propProjectType, setPropProjectType] = useState("growth");
+
+  const [kpiSettings, setKpiSettings] = useState<KpiSettingsRow | null>(null);
+  const [kpiDraft, setKpiDraft] = useState<Record<string, string>>({});
+  const [kpiMessage, setKpiMessage] = useState<string | null>(null);
+  const [kpiFailed, setKpiFailed] = useState(false);
+  const [kpiSaving, setKpiSaving] = useState(false);
 
   const [sites, setSites] = useState<GscSite[]>([]);
   const [sitesError, setSitesError] = useState<string | null>(null);
@@ -55,10 +84,24 @@ export default function AdminSettingsPage() {
       });
   }, []);
 
+  const loadKpiSettings = useCallback(() => {
+    fetch("/api/admin/kpi-settings")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.settings) return;
+        setKpiSettings(data.settings);
+        setKpiDraft(
+          Object.fromEntries(Object.entries(data.settings).map(([key, value]) => [key, String(value)])),
+        );
+      })
+      .catch(() => setKpiSettings(null));
+  }, []);
+
   useEffect(() => {
     loadAliases();
     loadProperties();
-  }, [loadAliases, loadProperties]);
+    loadKpiSettings();
+  }, [loadAliases, loadProperties, loadKpiSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,11 +155,40 @@ export default function AdminSettingsPage() {
     await fetch("/api/admin/project-gsc-properties", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project: propProject, gscProperty: propGscProperty }),
+      body: JSON.stringify({
+        project: propProject,
+        gscProperty: propGscProperty,
+        projectType: propProjectType,
+      }),
     });
     setPropProject("");
     setPropGscProperty("");
+    setPropProjectType("growth");
     loadProperties();
+  }
+
+  async function saveKpiSettings() {
+    setKpiSaving(true);
+    setKpiMessage(null);
+    setKpiFailed(false);
+    try {
+      const res = await fetch("/api/admin/kpi-settings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          Object.fromEntries(Object.entries(kpiDraft).map(([key, value]) => [key, Number(value)])),
+        ),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not save KPI settings");
+      setKpiSettings(data.settings);
+      setKpiMessage("Saved. Run Recompute scores in Admin → Overview to apply it to existing ranges.");
+    } catch (error) {
+      setKpiFailed(true);
+      setKpiMessage((error as Error).message);
+    } finally {
+      setKpiSaving(false);
+    }
   }
 
   async function deleteProperty(project: string) {
@@ -195,6 +267,18 @@ export default function AdminSettingsPage() {
                 ))}
               </select>
             </Field>
+            <Field label="Project type">
+              <select
+                value={propProjectType}
+                onChange={(e) => setPropProjectType(e.target.value)}
+                className={inputClass}
+                title="Sets how much growth this project needs to score well"
+              >
+                <option value="new">New</option>
+                <option value="growth">Growth</option>
+                <option value="stable">Stable</option>
+              </select>
+            </Field>
             <Button onClick={saveProperty} disabled={!propProject || !propGscProperty}>
               Save mapping
             </Button>
@@ -227,6 +311,7 @@ export default function AdminSettingsPage() {
                   <code className="rounded bg-neutral-soft px-1.5 py-0.5 text-[13px]">{property.gsc_property}</code>
                 </span>
                 <span className="flex items-center gap-2">
+                  <Badge tone="neutral">{PROJECT_TYPE_LABELS[property.project_type] ?? property.project_type}</Badge>
                   {sites.length > 0 && !knownSiteUrls.has(property.gsc_property) && (
                     <Badge tone="negative">Not in your GSC list</Badge>
                   )}
@@ -237,6 +322,53 @@ export default function AdminSettingsPage() {
               </li>
             ))}
           </ul>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="KPI settings"
+          description="How growth turns into a 0–100 score. Saving does not rescore on its own — run Recompute scores in Admin → Overview."
+        />
+        <div className="space-y-4 px-5 py-4">
+          {!kpiSettings && <p className="text-[13px] text-ink-subtle">Loading settings…</p>}
+          {kpiSettings && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {KPI_FIELDS.map((field) => (
+                  <Field key={field.key} label={field.label}>
+                    <input
+                      type="number"
+                      step={field.step}
+                      value={kpiDraft[field.key] ?? ""}
+                      onChange={(e) => setKpiDraft((draft) => ({ ...draft, [field.key]: e.target.value }))}
+                      className={inputClass}
+                    />
+                    <span className="text-xs text-ink-subtle">{field.hint}</span>
+                  </Field>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button onClick={saveKpiSettings} disabled={kpiSaving}>
+                  {kpiSaving ? "Saving…" : "Save KPI settings"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    setKpiDraft(
+                      Object.fromEntries(Object.entries(kpiSettings).map(([key, value]) => [key, String(value)])),
+                    )
+                  }
+                  disabled={kpiSaving}
+                >
+                  Reset
+                </Button>
+                {kpiMessage && (
+                  <p className={`text-[13px] ${kpiFailed ? "text-negative" : "text-ink-muted"}`}>{kpiMessage}</p>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </Card>
 

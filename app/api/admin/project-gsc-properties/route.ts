@@ -5,6 +5,7 @@ import {
   upsertProjectGscProperty,
 } from "@/lib/repositories/project-gsc-properties";
 import { listDistinctProjects } from "@/lib/repositories/content-urls";
+import { PROJECT_TYPES, type ProjectType } from "@/lib/performance/score";
 
 export async function GET() {
   const [properties, projectNames] = await Promise.all([listProjectGscProperties(), listDistinctProjects()]);
@@ -21,7 +22,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "project and gscProperty are required" }, { status: 400 });
   }
 
-  await upsertProjectGscProperty(project, gscProperty, notes);
+  // Left undefined when absent so an existing project keeps its current type
+  // instead of being reset to the default.
+  let projectType: ProjectType | undefined;
+  if (body.projectType !== undefined && body.projectType !== null && body.projectType !== "") {
+    const candidate = String(body.projectType);
+    if (!PROJECT_TYPES.includes(candidate as ProjectType)) {
+      return NextResponse.json(
+        { error: `projectType must be one of: ${PROJECT_TYPES.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    projectType = candidate as ProjectType;
+  }
+
+  await upsertProjectGscProperty(project, gscProperty, notes, projectType);
   return NextResponse.json({ ok: true });
 }
 
