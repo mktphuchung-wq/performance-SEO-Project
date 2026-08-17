@@ -18,20 +18,30 @@ interface ProjectGscProperty {
 }
 
 interface KpiSettingsRow {
-  coefficient_new: number;
-  coefficient_growth: number;
-  coefficient_stable: number;
-  new_url_grace_days: number;
+  target_growth_pct_new: number;
+  target_growth_pct_growth: number;
+  target_growth_pct_stable: number;
+  smoothing_constant: number;
   click_weight: number;
   impression_weight: number;
   url_weight_cap_pct: number;
 }
 
 const KPI_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string; step: string }> = [
-  { key: "coefficient_new", label: "Coefficient · New", hint: "Growth band for New projects", step: "0.1" },
-  { key: "coefficient_growth", label: "Coefficient · Growth", hint: "1.0 → ±50% growth hits 100/0", step: "0.1" },
-  { key: "coefficient_stable", label: "Coefficient · Stable", hint: "0.3 → ±15% growth hits 100/0", step: "0.1" },
-  { key: "new_url_grace_days", label: "New URL grace (days)", hint: "Days a new URL sits out of scoring", step: "1" },
+  { key: "target_growth_pct_new", label: "Target growth · New (%)", hint: "Growth that earns a 100", step: "1" },
+  { key: "target_growth_pct_growth", label: "Target growth · Growth (%)", hint: "Growth that earns a 100", step: "1" },
+  {
+    key: "target_growth_pct_stable",
+    label: "Target growth · Stable (%)",
+    hint: "Lower — less movement expected",
+    step: "1",
+  },
+  {
+    key: "smoothing_constant",
+    label: "Smoothing constant",
+    hint: "Damps the ratio at low baselines. Raise it if tiny URLs score wildly",
+    step: "1",
+  },
   { key: "click_weight", label: "Click weight", hint: "Must add up to 1 with impression weight", step: "0.05" },
   { key: "impression_weight", label: "Impression weight", hint: "Must add up to 1 with click weight", step: "0.05" },
   { key: "url_weight_cap_pct", label: "URL weight cap (%)", hint: "Max share one URL can take", step: "1" },
@@ -328,7 +338,7 @@ export default function AdminSettingsPage() {
       <Card>
         <CardHeader
           title="KPI settings"
-          description="How growth turns into a 0–100 score. Saving does not rescore on its own — run Recompute scores in Admin → Overview."
+          description="How growth turns into a 0–100 score: hitting the target growth for the project's type scores 100, no growth scores 50. Saving does not rescore on its own — run Recompute scores in Admin → Overview."
         />
         <div className="space-y-4 px-5 py-4">
           {!kpiSettings && <p className="text-[13px] text-ink-subtle">Loading settings…</p>}
