@@ -17,11 +17,13 @@ export async function GET() {
  * them is still only valid against whatever the other one currently is.
  */
 function validate(merged: KpiSettingsRow): string | null {
-  for (const key of ["coefficient_new", "coefficient_growth", "coefficient_stable"] as const) {
+  // A target of 0 makes log2(1 + 0/100) = 0, and the sensitivity it feeds
+  // divides by exactly that — so 0 is rejected here as well as in the schema.
+  for (const key of ["target_growth_pct_new", "target_growth_pct_growth", "target_growth_pct_stable"] as const) {
     if (!(merged[key] > 0)) return `${key} must be greater than 0`;
   }
-  if (!Number.isInteger(merged.new_url_grace_days) || merged.new_url_grace_days < 0) {
-    return "new_url_grace_days must be an integer of 0 or more";
+  if (!(merged.smoothing_constant > 0)) {
+    return "smoothing_constant must be greater than 0";
   }
   for (const key of ["click_weight", "impression_weight"] as const) {
     if (!(merged[key] >= 0 && merged[key] <= 1)) return `${key} must be between 0 and 1`;

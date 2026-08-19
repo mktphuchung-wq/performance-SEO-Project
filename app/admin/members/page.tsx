@@ -63,7 +63,7 @@ export default function AdminMembersPage() {
       <Card>
         <CardHeader
           title={`KPI score — ${RANGE_LABELS[range] ?? range}`}
-          description="Growth graded 0–100 and weighted by traffic. New URLs sit out until they have a period to be compared against."
+          description="Growth graded 0–100 and weighted by traffic. See Admin → KPI for the same scores next to volume and raw deltas."
         />
         {scoreError && <p className="px-5 py-4 text-[13px] text-negative">{scoreError}</p>}
         {!scoreError && !scoreable ? (

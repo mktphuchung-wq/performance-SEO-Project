@@ -204,13 +204,9 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
       {
         projectType: row.project_type,
         dataStatus: row.data_status,
-        growthStatus: row.growth_status,
         kpiExcluded: row.kpi_excluded,
-        workedAt: row.worked_at,
-        endDate,
-        previousEndDate: row.previous_end_date,
-        clickGrowthPct: row.click_growth_pct,
-        impressionGrowthPct: row.impression_growth_pct,
+        currentClicks: row.current_clicks,
+        previousClicks: row.previous_clicks,
         currentImpressions: row.current_impressions,
         previousImpressions: row.previous_impressions,
       },
@@ -225,8 +221,6 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
       startDate,
       endDate,
       projectType: row.project_type,
-      clickGrowthPct: row.click_growth_pct,
-      impressionGrowthPct: row.impression_growth_pct,
       result,
     });
   }

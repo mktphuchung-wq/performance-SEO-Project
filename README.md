@@ -31,25 +31,40 @@ A 0–100 score is computed per Member and per Project from Clicks/Impressions g
 scoped to `last_1_month` / `last_3_months` / `last_6_months` — the ranges with a
 comparable previous period. `all_time` and `custom` are not scored at all.
 
+Growth is scored via a **smoothed log-ratio**, not a raw percentage:
+
+```
+ratio = (current + smoothing) / (previous + smoothing)
+score = clamp(50 + log2(ratio) × 50 / log2(1 + target_growth_pct/100), 0, 100)
+```
+
+so a URL with little or no prior baseline gets a well-defined, bounded score instead
+of an undefined or explosive percentage — `previous = 0` no longer divides by zero,
+and `previous = null` is simply read as 0. No growth scores 50; hitting the project
+type's target growth scores 100. At a large baseline the smoothing constant washes
+out and the number lands where the old linear percentage would have.
+
 Three things keep the number honest:
 
-- **New URLs are not graded as flat.** A URL with no previous-period baseline sits
-  out during a grace period instead of being scored as if it had stalled. It becomes
-  scoreable on its own once the cache has a period to compare against. A URL first
-  worked *after* the comparison window closed is always treated as new, whatever the
-  configured grace — no fixed day count can cover a shortfall that scales with the
-  range length.
-- **A spike cannot buy a high score.** Per-URL growth is clamped into 0–100 before
-  aggregation, so `1 → 10 clicks` (+900%) tops out at the same 100 as a URL that grew
-  reliably.
+- **One formula, no special cases.** A brand-new URL is scored like any other. It
+  does not need a grace period, because its weight (see below) is low by
+  construction — nothing measured in the previous period means nothing to weigh.
+- **A spike cannot buy an unbounded score.** The 0–100 clamp holds, so `1 → 50 clicks`
+  tops out at the same 100 as a URL that grew reliably. The clamp is deliberate: the
+  score answers "did this meet the growth expected of this kind of project?", not
+  "how spectacular was it?" — for that, read the Δ columns shown beside it.
 - **Small URLs cannot swing the total.** Aggregation weights by average impressions
   across both periods and caps how much of the total weight any single URL may carry.
 
 `kpi_score` is `null` — never `0` — when a member or project has no eligible URL.
-See `lib/performance/score.ts`. Coefficients, weighting, the grace period, and the
-per-URL cap are Admin-configurable under **Admin → Settings**; **Admin → Overview**
+See `lib/performance/score.ts`. Growth targets, the smoothing constant, weighting, and
+the per-URL cap are Admin-configurable under **Admin → Settings**; **Admin → Overview**
 has a *Recompute scores* action that re-grades from cached data without spending
 Search Console quota.
+
+**Admin → KPI** puts one range on a single sortable, filterable table: content volume
+in the window (URLs by the Sheet's `type` column), the KPI score, and the absolute and
+percentage deltas it was graded from — by member or by project.
 
 A **Quality** dimension is still deferred.
 
@@ -157,6 +172,8 @@ npm run build        # production build
 npm run typecheck    # tsc --noEmit
 npm run lint          # eslint
 npm run migrate       # apply pending migrations/*.sql against DATABASE_URL
+
+node scripts/verify-score.mjs   # arithmetic self-check of the KPI formula (no DB, no network)
 ```
 
 ## Deploying to Vercel

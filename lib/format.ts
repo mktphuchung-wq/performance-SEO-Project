@@ -41,7 +41,6 @@ export function formatScore(value: number | null | undefined): string {
 
 export const SCORE_STATE_LABELS: Record<string, string> = {
   normal: "Scored",
-  new_grace: "New (grace period)",
   excluded: "Excluded",
   no_data: "No data",
 };

@@ -7,8 +7,7 @@ export interface KpiScoreTableRow {
   key: string;
   label: string;
   kpi_score: number | null;
-  normal_url_count: number;
-  new_grace_url_count: number;
+  eligible_url_count: number;
   excluded_url_count: number;
   no_data_url_count: number;
   capped_url_count: number;
@@ -46,7 +45,6 @@ export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[];
             <th className="px-4 py-2.5">{entityLabel}</th>
             <th className="px-4 py-2.5">KPI score</th>
             <th className="px-4 py-2.5 text-right">Scored</th>
-            <th className="px-4 py-2.5 text-right">New (grace)</th>
             <th className="px-4 py-2.5 text-right">Excluded</th>
             <th className="px-4 py-2.5 text-right">No data</th>
             <th className="px-4 py-2.5 text-right">Capped</th>
@@ -67,10 +65,7 @@ export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[];
                   <Badge tone={scoreTone(row.kpi_score)}>{formatScore(row.kpi_score)}</Badge>
                 )}
               </td>
-              <td className="numeric px-4 py-2.5 text-right text-ink">{row.normal_url_count}</td>
-              <td className="numeric px-4 py-2.5 text-right text-ink-muted" title="New URLs, not yet comparable">
-                {row.new_grace_url_count}
-              </td>
+              <td className="numeric px-4 py-2.5 text-right text-ink">{row.eligible_url_count}</td>
               <td className="numeric px-4 py-2.5 text-right text-ink-muted">{row.excluded_url_count}</td>
               <td className="numeric px-4 py-2.5 text-right text-ink-subtle">{row.no_data_url_count}</td>
               <td

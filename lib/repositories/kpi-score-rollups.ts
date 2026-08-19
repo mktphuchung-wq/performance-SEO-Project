@@ -11,15 +11,13 @@ export interface UpsertScoreRollupInput extends ScoreAggregate {
 
 /** Column list shared by both score rollup tables, in insert order. */
 const SCORE_COLUMNS = `range_key, start_date, end_date, kpi_score,
-        eligible_url_count, normal_url_count, new_grace_url_count, excluded_url_count,
-        no_data_url_count, capped_url_count, total_weight`;
+        eligible_url_count, excluded_url_count, no_data_url_count,
+        capped_url_count, total_weight`;
 
 const SCORE_UPDATE_SET = `start_date = excluded.start_date,
        end_date = excluded.end_date,
        kpi_score = excluded.kpi_score,
        eligible_url_count = excluded.eligible_url_count,
-       normal_url_count = excluded.normal_url_count,
-       new_grace_url_count = excluded.new_grace_url_count,
        excluded_url_count = excluded.excluded_url_count,
        no_data_url_count = excluded.no_data_url_count,
        capped_url_count = excluded.capped_url_count,
@@ -34,8 +32,6 @@ function scoreValues(input: UpsertScoreRollupInput): unknown[] {
     input.endDate,
     input.kpiScore,
     input.eligibleUrlCount,
-    input.normalUrlCount,
-    input.newGraceUrlCount,
     input.excludedUrlCount,
     input.noDataUrlCount,
     input.cappedUrlCount,
@@ -47,7 +43,7 @@ export async function upsertMemberScore(memberEmail: string | null, input: Upser
   await query(
     `insert into public.member_performance_score
        (member_name, member_email, ${SCORE_COLUMNS}, refreshed_at, updated_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now(), now())
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), now())
      on conflict (member_name, range_key) do update set
        member_email = excluded.member_email,
        ${SCORE_UPDATE_SET}`,
@@ -59,7 +55,7 @@ export async function upsertProjectScore(input: UpsertScoreRollupInput): Promise
   await query(
     `insert into public.project_performance_score
        (project, ${SCORE_COLUMNS}, refreshed_at, updated_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), now())
      on conflict (project, range_key) do update set
        ${SCORE_UPDATE_SET}`,
     [input.key, ...scoreValues(input)],
@@ -73,8 +69,6 @@ export interface ScoreRollupRow {
   end_date: string;
   kpi_score: number | null;
   eligible_url_count: number;
-  normal_url_count: number;
-  new_grace_url_count: number;
   excluded_url_count: number;
   no_data_url_count: number;
   capped_url_count: number;

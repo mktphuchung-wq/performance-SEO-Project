@@ -66,7 +66,7 @@ export default function DashboardPage() {
             !scoreable ? (
               `${RANGE_LABELS[range] ?? range} is not scored`
             ) : score ? (
-              `${score.normal_url_count} scored · ${score.new_grace_url_count} new · ${score.excluded_url_count} excluded`
+              `${score.eligible_url_count} scored · ${score.excluded_url_count} excluded · ${score.no_data_url_count} no data`
             ) : (
               "No eligible URL yet"
             )

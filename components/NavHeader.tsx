@@ -37,6 +37,7 @@ export function NavHeader() {
           {isAdmin && (
             <>
               <NavLink href="/admin" label="Overview" exact />
+              <NavLink href="/admin/kpi" label="KPI" />
               <NavLink href="/admin/members" label="Members" />
               <NavLink href="/admin/projects" label="Projects" />
               <NavLink href="/admin/urls" label="URLs" />
