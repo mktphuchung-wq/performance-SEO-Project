@@ -68,6 +68,70 @@ percentage deltas it was graded from — by member or by project.
 
 A **Quality** dimension is still deferred.
 
+## Official KPI (3 layers) and Trend
+
+The range scores answer "how did this window go?". They do not answer "what is this
+member's KPI?" — three numbers are not a KPI. **Official KPI** is that single number,
+built in three layers:
+
+```
+LAYER 1   URL            clicks + impressions   →  URL Score          lib/performance/score.ts
+LAYER 2   MEMBER×RANGE   the member's URLs      →  1M / 3M / 6M       lib/performance/score.ts
+LAYER 3   OFFICIAL KPI   1M×25% 3M×50% 6M×25%   →  Official KPI       lib/performance/composite-score.ts
+```
+
+3M carries the most weight because it is where SEO work has had time to show but is
+still describing now; 1M reacts fastest and is the noisiest, 6M proves durability but
+drags old results into a current assessment. Nothing from Layer 1 is added back at
+Layer 3 — clicks and impressions already went through the URL score, and re-adding a
+growth bonus on top would count one piece of work twice.
+
+**A missing period is not a zero.** `78 / 72 / null` is scored `(78×25 + 72×50) ÷ 75 =
+74`, not `55.5` — the weights of the periods that exist are renormalized, and the
+coverage (`Based on 2 of 3 periods`) is shown beside the number. No period at all gives
+`null`, never `0`, exactly as `kpi_score` does.
+
+Official KPI is **derived, not stored**: the three member score rows already exist, so
+there is no new table and nothing to recompute when a weight changes.
+
+### Trend — diagnostic only
+
+Two members can share a KPI and be in opposite situations, so the same three scores are
+also read as a direction: **Improving / Declining / Recovering / Cooling / Stable /
+Insufficient data**. A gap smaller than the tolerance (default 5 points) is not a
+direction, just noise. With only two periods only the direction is claimed — Recovering
+and Cooling need a middle point and are never guessed at.
+
+Trend never enters the formula: no bonus, no penalty, no multiplier, and it never
+affects ranking. Performance that changed is already reflected in 1M/3M/6M; paying for
+the direction as well would be a second reward for one piece of work. It is always
+shown as text, never as colour alone.
+
+### Per-member weights ("chiến lược cá nhân")
+
+The 25/50/25 mix is the team default, configurable under **Admin → Settings → Official
+KPI — period weights**, and any member can be put on their own mix there:
+
+| Strategy | 1M | 3M | 6M | For |
+|---|---:|---:|---:|---|
+| Balanced | 25% | 50% | 25% | Team default |
+| Momentum | 50% | 35% | 15% | A turnaround or a new site — recent movement is the job |
+| Sustainability | 15% | 35% | 50% | An established site — holding the level is the job |
+| Custom | — | — | — | Any mix, rescaled to 100% on save |
+
+Every mix sums to 100%, so a personal strategy changes **which months a member is judged
+on, never how generous the score is** — two Official KPIs stay comparable. The mix used
+is always printed under the number, and a member on an override is labelled as such.
+Which three periods exist, and the renormalization rule, are deliberately not settings.
+
+The KPI is independent of the RangeSwitcher on every page that shows it: the switcher
+investigates the traffic behind the score, it cannot redefine the score. Picking
+`All time` leaves Official KPI exactly where it was.
+
+`node scripts/verify-composite-score.mjs` checks the arithmetic — the full spec test
+table, the missing-data rule, the trend states, and the weight presets — with no
+database and no test runner.
+
 ## Stack
 
 Next.js (App Router) + TypeScript + Tailwind, NextAuth (Google OAuth), Postgres (Neon)

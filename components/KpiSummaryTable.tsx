@@ -138,7 +138,13 @@ export function KpiSummaryTable({
                 align="right"
                 title="URLs worked on inside this window, by the Sheet's type column"
               />
-              <SortHeader {...headerProps} label="KPI score" sortKey="score" active={sortKey === "score"} />
+              <SortHeader
+                {...headerProps}
+                label="Range score"
+                sortKey="score"
+                active={sortKey === "score"}
+                title="Score for the selected range only — the Official KPI is the 1M/3M/6M blend above"
+              />
               <SortHeader {...headerProps} label="Clicks" sortKey="clicks" active={sortKey === "clicks"} align="right" />
               <th className="px-4 py-2.5 text-right uppercase tracking-wide">Δ Clicks</th>
               <SortHeader

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import { KpiWeightsPanel } from "@/components/KpiWeightsPanel";
 import { Badge, Button, Card, CardHeader, Field, PageHeader, inputClass } from "@/components/ui";
 import { PROJECT_TYPE_LABELS } from "@/lib/format";
 
@@ -185,8 +186,11 @@ export default function AdminSettingsPage() {
       const res = await fetch("/api/admin/kpi-settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        // Only the fields this form renders. The row also carries the Layer 3
+        // period weights now, and posting a stale copy of those back would
+        // silently undo a change made in the weights panel above.
         body: JSON.stringify(
-          Object.fromEntries(Object.entries(kpiDraft).map(([key, value]) => [key, Number(value)])),
+          Object.fromEntries(KPI_FIELDS.map((field) => [field.key, Number(kpiDraft[field.key])])),
         ),
       });
       const data = await res.json();
@@ -381,6 +385,8 @@ export default function AdminSettingsPage() {
           )}
         </div>
       </Card>
+
+      <KpiWeightsPanel />
 
       <Card>
         <CardHeader

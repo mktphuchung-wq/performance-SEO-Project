@@ -1,4 +1,5 @@
 import { query, queryOne } from "@/lib/db";
+import type { KpiPeriodWeights } from "@/lib/performance/composite-score";
 import type { KpiSettings } from "@/lib/performance/score";
 
 export interface KpiSettingsRow {
@@ -9,6 +10,10 @@ export interface KpiSettingsRow {
   click_weight: number;
   impression_weight: number;
   url_weight_cap_pct: number;
+  kpi_weight_1m: number;
+  kpi_weight_3m: number;
+  kpi_weight_6m: number;
+  trend_tolerance: number;
 }
 
 /**
@@ -24,6 +29,10 @@ export const KPI_SETTINGS_COLUMNS = [
   "click_weight",
   "impression_weight",
   "url_weight_cap_pct",
+  "kpi_weight_1m",
+  "kpi_weight_3m",
+  "kpi_weight_6m",
+  "trend_tolerance",
 ] as const;
 
 export type KpiSettingsColumn = (typeof KPI_SETTINGS_COLUMNS)[number];
@@ -40,6 +49,29 @@ export async function getKpiSettings(): Promise<KpiSettings> {
     clickWeight: Number(row.click_weight),
     impressionWeight: Number(row.impression_weight),
     urlWeightCapPct: Number(row.url_weight_cap_pct),
+  };
+}
+
+export interface CompositeKpiSettings {
+  /** Team default mix, used for every member without a personal strategy. */
+  defaultWeights: KpiPeriodWeights;
+  trendTolerance: number;
+}
+
+/**
+ * Layer 3's half of the settings row. Kept apart from `getKpiSettings()` because
+ * they answer different questions: that one tunes how a URL is graded, this one
+ * how the three period scores are combined. Nothing in Layer 1 reads these.
+ */
+export async function getCompositeKpiSettings(): Promise<CompositeKpiSettings> {
+  const row = await getKpiSettingsRow();
+  return {
+    defaultWeights: {
+      last_1_month: Number(row.kpi_weight_1m),
+      last_3_months: Number(row.kpi_weight_3m),
+      last_6_months: Number(row.kpi_weight_6m),
+    },
+    trendTolerance: Number(row.trend_tolerance),
   };
 }
 

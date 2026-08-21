@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { validateWeights } from "@/lib/performance/composite-score";
 import {
   KPI_SETTINGS_COLUMNS,
   getKpiSettingsRow,
@@ -33,6 +34,17 @@ function validate(merged: KpiSettingsRow): string | null {
   }
   if (!(merged.url_weight_cap_pct > 0 && merged.url_weight_cap_pct <= 100)) {
     return "url_weight_cap_pct must be greater than 0 and at most 100";
+  }
+  // Layer 3: the team default period mix has to stay on the 0–100 scale, which
+  // is what summing to 1 buys. The same rule the database check enforces.
+  const weightError = validateWeights({
+    last_1_month: merged.kpi_weight_1m,
+    last_3_months: merged.kpi_weight_3m,
+    last_6_months: merged.kpi_weight_6m,
+  });
+  if (weightError) return `Official KPI period weights — ${weightError}`;
+  if (!(merged.trend_tolerance >= 0 && merged.trend_tolerance <= 50)) {
+    return "trend_tolerance must be between 0 and 50";
   }
   return null;
 }

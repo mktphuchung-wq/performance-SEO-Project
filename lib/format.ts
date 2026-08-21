@@ -39,6 +39,60 @@ export function formatScore(value: number | null | undefined): string {
   return Math.round(value).toString();
 }
 
+/**
+ * Official KPI keeps one decimal — it is a weighted blend of three scores, and
+ * rounding 74.4 and 73.6 both to 74 hides real distance between two members.
+ */
+export function formatOfficialKpi(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return value.toFixed(1);
+}
+
+/**
+ * Trend never travels as colour alone — the label is the message, the glyph and
+ * the tone only reinforce it.
+ */
+export const TREND_LABELS: Record<string, string> = {
+  improving: "Improving",
+  declining: "Declining",
+  recovering: "Recovering",
+  cooling: "Cooling",
+  stable: "Stable",
+  insufficient_data: "Insufficient data",
+};
+
+export const TREND_GLYPHS: Record<string, string> = {
+  improving: "↑",
+  declining: "↓",
+  recovering: "↗",
+  cooling: "↘",
+  stable: "→",
+  insufficient_data: "—",
+};
+
+export const TREND_HINTS: Record<string, string> = {
+  improving: "Recent months are clearly above the mid-term.",
+  declining: "Recent months are clearly below the mid-term.",
+  recovering: "Performance dipped mid-term and is climbing back.",
+  cooling: "Performance peaked mid-term and is easing off.",
+  stable: "No period differs enough from the others to call a direction.",
+  insufficient_data: "Fewer than two periods have a score, so no direction can be read.",
+};
+
+export const KPI_STRATEGY_LABELS: Record<string, string> = {
+  balanced: "Balanced",
+  momentum: "Momentum",
+  sustainability: "Sustainability",
+  custom: "Custom",
+};
+
+export const KPI_STRATEGY_HINTS: Record<string, string> = {
+  balanced: "Team default — 3M anchors the score.",
+  momentum: "Weights recent months hardest — for a turnaround or a new site.",
+  sustainability: "Weights the half-year hardest — for holding an established site.",
+  custom: "A mix set by hand for this member.",
+};
+
 export const SCORE_STATE_LABELS: Record<string, string> = {
   normal: "Scored",
   excluded: "Excluded",
