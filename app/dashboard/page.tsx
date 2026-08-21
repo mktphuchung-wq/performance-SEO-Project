@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ContentReviewSummary } from "@/components/ContentReviewSummary";
 import { MemberKpiSummary } from "@/components/MemberKpiSummary";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { StatCard } from "@/components/StatCard";
@@ -74,6 +75,12 @@ export default function DashboardPage() {
       />
 
       <MemberKpiSummary summary={summary} loading={summaryLoading} />
+
+      {/* The second, independent KPI: Search Console cannot see whether an
+          article was any good, so a human grades that separately. It is stacked
+          below rather than merged in — one number that averaged traffic growth
+          with a review score would explain neither. */}
+      <ContentReviewSummary />
 
       {/* The switcher sits below the KPI, next to what it actually controls.
           Putting it in the page header made it look like it governed everything

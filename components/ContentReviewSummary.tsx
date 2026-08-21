@@ -1,0 +1,95 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Card, CardHeader, EmptyState } from "@/components/ui";
+import { formatMonthLabel } from "@/lib/content-review/month";
+import { formatContentScore, formatPercent } from "@/lib/format";
+import type { ContentReviewBatch } from "@/lib/repositories/content-review";
+
+/**
+ * A member reading their own Content KPI, month by month.
+ *
+ * Read-only by design: this score is a judgement someone made about the work,
+ * and the person being judged should see exactly what was recorded — including
+ * the months that have not been graded yet, which show "—" rather than a 0 that
+ * would read as a failure.
+ *
+ * It sits beside the Official KPI card, never merged into it. The two answer
+ * different questions (did the traffic grow / was the work good) and averaging
+ * them would hide both.
+ */
+export function ContentReviewSummary() {
+  const [batches, setBatches] = useState<ContentReviewBatch[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/me/content-review")
+      .then((r) => r.json())
+      .catch(() => ({ batches: [] }))
+      .then((res: { batches?: ContentReviewBatch[] }) => {
+        if (cancelled) return;
+        setBatches(res.batches ?? []);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader
+        title="Content KPI"
+        description="Quality of the work itself, graded by hand against the team checklist — 0.8 × quality + 0.2 × how much of the monthly target was delivered. Separate from Performance KPI above."
+      />
+
+      {loading && <p className="px-5 py-8 text-center text-sm text-ink-muted">Loading…</p>}
+
+      {!loading && batches.length === 0 && (
+        <EmptyState
+          title="No month has been reviewed yet"
+          hint="This score appears once an admin has graded a month of your work."
+        />
+      )}
+
+      {!loading && batches.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-line text-xs uppercase tracking-wide text-ink-subtle">
+              <tr>
+                <th className="px-5 py-2.5 font-medium">Month</th>
+                <th className="px-4 py-2.5 text-right font-medium">Content KPI</th>
+                <th className="px-4 py-2.5 text-right font-medium">Quality</th>
+                <th className="px-4 py-2.5 text-right font-medium">Tasks / target</th>
+                <th className="px-4 py-2.5 text-right font-medium">Completion</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {batches.map((batch) => (
+                <tr key={batch.id}>
+                  <td className="px-5 py-2.5 text-ink">
+                    {formatMonthLabel(batch.month)}
+                    {batch.status !== "final" && <span className="ml-2 text-[12px] text-ink-subtle">in review</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-right numeric text-ink">{formatContentScore(batch.content_score)}</td>
+                  <td className="px-4 py-2.5 text-right numeric text-ink-muted">
+                    {formatPercent(batch.avg_quality_pct)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right numeric text-ink-muted">
+                    {batch.task_count} / {batch.min_post > 0 ? batch.min_post : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-right numeric text-ink-muted">
+                    {formatPercent(batch.completion_pct)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}

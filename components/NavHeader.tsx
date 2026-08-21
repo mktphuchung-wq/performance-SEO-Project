@@ -38,6 +38,9 @@ export function NavHeader() {
             <>
               <NavLink href="/admin" label="Overview" exact />
               <NavLink href="/admin/kpi" label="KPI" />
+              {/* Named for what it measures, not "SEO KPI" — the label has to be
+                  unmistakable next to the Search Console KPI beside it. */}
+              <NavLink href="/admin/content-review" label="Content KPI" />
               <NavLink href="/admin/members" label="Members" />
               <NavLink href="/admin/projects" label="Projects" />
               <NavLink href="/admin/urls" label="URLs" />

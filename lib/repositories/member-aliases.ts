@@ -22,6 +22,35 @@ export async function getMemberAliasMap(): Promise<Map<string, string>> {
   return new Map(rows.map((row) => [row.member_name, row.member_email]));
 }
 
+/**
+ * The reverse lookup: which name in the Sheet is this signed-in person?
+ *
+ * Needed because tables keyed on identity-in-the-Sheet — member_kpi_weights,
+ * content_review_batches — store member_name, while a session only ever carries
+ * an email. The alias table is the mapping admins maintain, so it wins; the
+ * fallback covers a member whose email reached content_urls through the Sheet
+ * itself but who has no alias row yet.
+ *
+ * Returns null when nothing matches, which callers must read as "this person has
+ * no work under review", not as an error.
+ */
+export async function getMemberNameByEmail(email: string): Promise<string | null> {
+  const alias = await query<{ member_name: string }>(
+    "select member_name from public.member_aliases where lower(member_email) = lower($1) order by member_name limit 1",
+    [email],
+  );
+  if (alias[0]) return alias[0].member_name;
+
+  const fromUrls = await query<{ member_name: string }>(
+    `select member_name from public.content_urls
+     where lower(member_email) = lower($1) and member_name <> ''
+     order by member_name
+     limit 1`,
+    [email],
+  );
+  return fromUrls[0]?.member_name ?? null;
+}
+
 export async function upsertMemberAlias(memberName: string, memberEmail: string): Promise<void> {
   await query(
     `insert into public.member_aliases (member_name, member_email)

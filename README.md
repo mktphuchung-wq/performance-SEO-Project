@@ -132,6 +132,48 @@ investigates the traffic behind the score, it cannot redefine the score. Picking
 table, the missing-data rule, the trend states, and the weight presets — with no
 database and no test runner.
 
+## Content KPI (manual review)
+
+A second, **independent** KPI. Official KPI reads Search Console and answers "did the
+traffic grow"; Content KPI is typed in by an admin and answers "was the work any good,
+and was there enough of it". They are never averaged together — one number blending
+traffic growth with a review score would explain neither, so both are shown side by side
+on the member dashboard.
+
+| | Official KPI | Content KPI |
+|---|---|---|
+| Source | Search Console | A human grading against a checklist |
+| Cycle | Rolling 1M / 3M / 6M | Calendar month, opened by an admin |
+| Tables | `url_performance_score`, `kpi_settings`, … | `content_review_*` (migration 007) |
+
+```
+quality(task)  = Σ(score/10 × weight) / Σ(weight) × 100   — graded criteria only
+quality(month) = mean of the tasks that have a quality at all
+completion     = min(100, tasks ÷ min_post × 100)
+Content KPI    = 0.8 × quality(month) + 0.2 × completion
+```
+
+Everything missing stays missing: an ungraded cell is left out of its task average
+(it is not a 0), a task with no grade at all drops out of the month, `min_post = 0`
+means no target was set rather than 0% delivered, and if either half is unknown the
+month has no Content KPI at all — it shows "—".
+
+**Admin → Content KPI** is the review screen: pick a member and a month, set `Min post`,
+paste the rows from that member's Sheet tab (`Ngày | Dự án - Web | Type | Task | URLs`,
+data cells only), preview them, then grade each task 0–10 per criterion. The preview
+step exists because the Sheet has eight columns and only five are wanted — a shifted
+paste is obvious to a human and unguessable in code. `URLs` is stored verbatim for
+reference and never parsed or scored.
+
+**Admin → Content KPI → Manage checklist** owns the criteria and their weights. A
+criterion that has already graded something is *retired* rather than deleted, so past
+months still show what they were judged on; deleting one for real erases those grades
+and asks twice. Changing a weight rescores every month that used it.
+
+Members see their own months read-only on the dashboard, and only their own —
+`/api/me/content-review` resolves the session email to a Sheet name and has no
+"admin views another member" branch.
+
 ## Stack
 
 Next.js (App Router) + TypeScript + Tailwind, NextAuth (Google OAuth), Postgres (Neon)
@@ -238,6 +280,7 @@ npm run lint          # eslint
 npm run migrate       # apply pending migrations/*.sql against DATABASE_URL
 
 node scripts/verify-score.mjs   # arithmetic self-check of the KPI formula (no DB, no network)
+node scripts/verify-content-review.mjs   # Content KPI rules — needs DATABASE_URL, always rolls back
 ```
 
 ## Deploying to Vercel

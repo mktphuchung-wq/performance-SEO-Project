@@ -49,6 +49,17 @@ export function formatOfficialKpi(value: number | null | undefined): string {
 }
 
 /**
+ * Content KPI — the manually reviewed score, on the same 0–100 scale and to the
+ * same precision as Official KPI, but deliberately its own function: the two are
+ * separate measurements and nothing should end up sharing a formatter by
+ * accident. A month with no gradeable data reads "—", never 0.
+ */
+export function formatContentScore(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return value.toFixed(1);
+}
+
+/**
  * Trend never travels as colour alone — the label is the message, the glyph and
  * the tone only reinforce it.
  */
