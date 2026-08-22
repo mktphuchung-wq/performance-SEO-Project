@@ -10,8 +10,19 @@ interface DraftRow {
   weight: string;
 }
 
+interface MembersResponse {
+  memberNames?: string[];
+  membersWithCriteria?: string[];
+  activeCriteriaCounts?: Record<string, number>;
+}
+
 /**
- * The checklist a reviewer grades against.
+ * The checklist each member is graded against.
+ *
+ * Per member, not per team: two people doing different work should not be judged
+ * on the same list, and a writer's checklist has little to do with someone doing
+ * internal linking. Set up once here and reused every month — starting a new
+ * month never means re-entering criteria.
  *
  * It lives in the database rather than in code because it is a judgement about
  * what good content is, and that changes — the same reason kpi_settings is a
@@ -22,10 +33,16 @@ interface DraftRow {
  * and deactivated, so past months still show what they were judged on. Deleting
  * it for real takes those grades with it, which is why that path asks twice.
  */
-export default function ContentReviewCriteriaPage() {
+export default function ContentReviewSettingsPage() {
+  const [memberNames, setMemberNames] = useState<string[]>([]);
+  const [membersWithCriteria, setMembersWithCriteria] = useState<string[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [member, setMember] = useState("");
+
   // null means "not fetched yet", which is what the loading state is derived
   // from — an empty checklist and an unloaded one are different screens.
   const [criteriaData, setCriteriaData] = useState<ContentReviewCriterion[] | null>(null);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -33,24 +50,46 @@ export default function ContentReviewCriteriaPage() {
   const [newName, setNewName] = useState("");
   const [newWeight, setNewWeight] = useState("1");
   const [drafts, setDrafts] = useState<Record<string, DraftRow>>({});
+  const [copyFrom, setCopyFrom] = useState("");
+
+  const loadMembers = useCallback(() => {
+    fetch("/api/admin/content-review/members")
+      .then((r) => r.json())
+      .then((res: MembersResponse) => {
+        const names = res.memberNames ?? [];
+        setMemberNames(names);
+        setMembersWithCriteria(res.membersWithCriteria ?? []);
+        setCounts(res.activeCriteriaCounts ?? {});
+        setMember((current) => current || names[0] || "");
+      })
+      .catch(() => setMemberNames([]));
+  }, []);
+
+  useEffect(loadMembers, [loadMembers]);
 
   const load = useCallback(() => {
-    fetch("/api/admin/content-review/criteria")
+    if (!member) return;
+
+    fetch(`/api/admin/content-review/criteria?member=${encodeURIComponent(member)}`)
       .then((r) => r.json())
       .then((res: { criteria?: ContentReviewCriterion[] }) => {
         const rows = res.criteria ?? [];
         setCriteriaData(rows);
-        setDrafts(
-          Object.fromEntries(rows.map((row) => [row.id, { name: row.name, weight: String(row.weight) }])),
-        );
+        setDrafts(Object.fromEntries(rows.map((row) => [row.id, { name: row.name, weight: String(row.weight) }])));
       })
-      .catch(() => setCriteriaData([]));
-  }, []);
+      .catch(() => setCriteriaData([]))
+      .then(() => setLoadedFor(member));
+  }, [member]);
 
   useEffect(load, [load]);
 
   const criteria = criteriaData ?? [];
-  const loading = criteriaData === null;
+  const loading = Boolean(member) && loadedFor !== member;
+  const activeCount = criteria.filter((row) => row.is_active).length;
+
+  // Copying onto the member you copied from is the one move that does nothing,
+  // so it is not offered.
+  const copySources = membersWithCriteria.filter((name) => name !== member);
 
   function report(text: string, isError = false) {
     setMessage(text);
@@ -58,20 +97,56 @@ export default function ContentReviewCriteriaPage() {
   }
 
   async function addCriterion() {
-    if (!newName.trim()) return;
+    if (!newName.trim() || !member) return;
     setSaving(true);
     try {
       const res = await fetch("/api/admin/content-review/criteria", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: newName.trim(), weight: newWeight }),
+        body: JSON.stringify({ memberName: member, name: newName.trim(), weight: newWeight }),
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error ?? "Could not add this criterion");
       setNewName("");
       setNewWeight("1");
-      report(`Added "${payload.criterion.name}".`);
+      report(`Added "${payload.criterion.name}" to ${member}'s checklist.`);
       load();
+      loadMembers();
+    } catch (error) {
+      report((error as Error).message, true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * A duplicate, not a shared list. The confirmation says so, because "copy"
+   * could reasonably be read either way and only one of the two readings
+   * survives the next weight edit.
+   */
+  async function runCopy() {
+    if (!copyFrom || !member) return;
+
+    const confirmed = window.confirm(
+      `Copy ${copyFrom}'s active criteria onto ${member}'s checklist?\n\n` +
+        `They are copied, not shared: editing ${copyFrom}'s list afterwards will not touch ${member}'s. ` +
+        `Anything ${member} already has under the same name is left as it is.`,
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/content-review/criteria/copy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fromMember: copyFrom, toMember: member }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error ?? "Could not copy");
+      const skipped = payload.skipped ? ` ${payload.skipped} were already there and left alone.` : "";
+      report(`Copied ${payload.copied} criteria from ${copyFrom} to ${member}.${skipped}`);
+      load();
+      loadMembers();
     } catch (error) {
       report((error as Error).message, true);
     } finally {
@@ -94,6 +169,7 @@ export default function ContentReviewCriteriaPage() {
         : "";
       report(okMessage + recomputed);
       load();
+      loadMembers();
     } catch (error) {
       report((error as Error).message, true);
     } finally {
@@ -124,12 +200,14 @@ export default function ContentReviewCriteriaPage() {
         if (!forced.ok) throw new Error(forcedPayload.error ?? "Could not delete");
         report(`Deleted "${row.name}" and ${forcedPayload.deletedScoreCount} grades.`);
         load();
+        loadMembers();
         return;
       }
 
       if (!res.ok) throw new Error(payload.error ?? "Could not delete");
       report(`Deleted "${row.name}".`);
       load();
+      loadMembers();
     } catch (error) {
       report((error as Error).message, true);
     } finally {
@@ -165,13 +243,11 @@ export default function ContentReviewCriteriaPage() {
     }
   }
 
-  const activeCount = criteria.filter((row) => row.is_active).length;
-
   return (
     <div className="mx-auto max-w-4xl space-y-6 px-5 py-6">
       <PageHeader
-        title="Content KPI — checklist"
-        description="The criteria every task is graded against, and how much each one counts."
+        title="Content KPI — checklists"
+        description="What each member is graded against, and how much each criterion counts. Set once per member and reused every month."
         action={
           <Link
             href="/admin/content-review"
@@ -184,6 +260,52 @@ export default function ContentReviewCriteriaPage() {
 
       <Card>
         <CardHeader
+          title="Whose checklist"
+          description="Each member has their own. Two people doing different work should not be graded on the same list."
+        />
+        <div className="grid gap-3 px-5 py-4 sm:grid-cols-2">
+          <Field label="Member">
+            <select value={member} onChange={(e) => setMember(e.target.value)} className={inputClass}>
+              {memberNames.length === 0 && <option value="">No members found</option>}
+              {memberNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                  {counts[name] ? ` — ${counts[name]} criteria` : " — not set up yet"}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Copy criteria from…">
+            <div className="flex gap-2">
+              <select
+                value={copyFrom}
+                onChange={(e) => setCopyFrom(e.target.value)}
+                disabled={!member || copySources.length === 0}
+                className={inputClass}
+              >
+                <option value="">
+                  {copySources.length === 0 ? "Nobody has a checklist yet" : "Pick a member…"}
+                </option>
+                {copySources.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <Button onClick={() => void runCopy()} disabled={saving || !copyFrom || !member}>
+                Copy
+              </Button>
+            </div>
+            <span className="text-xs text-ink-subtle">
+              Duplicates the list — editing either side afterwards leaves the other alone
+            </span>
+          </Field>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
           title="Add a criterion"
           description="Weight 1 means it counts the same as every other criterion — leave it at 1 unless one thing genuinely matters more."
         />
@@ -193,6 +315,7 @@ export default function ContentReviewCriteriaPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="e.g. Search intent match"
+              disabled={!member}
               className={inputClass}
             />
           </Field>
@@ -203,10 +326,11 @@ export default function ContentReviewCriteriaPage() {
               step="0.1"
               value={newWeight}
               onChange={(e) => setNewWeight(e.target.value)}
+              disabled={!member}
               className={inputClass}
             />
           </Field>
-          <Button onClick={() => void addCriterion()} disabled={saving || !newName.trim()}>
+          <Button onClick={() => void addCriterion()} disabled={saving || !member || !newName.trim()}>
             Add
           </Button>
         </div>
@@ -214,7 +338,7 @@ export default function ContentReviewCriteriaPage() {
 
       <Card>
         <CardHeader
-          title="Checklist"
+          title={member ? `${member}'s checklist` : "Checklist"}
           description={`${activeCount} active of ${criteria.length}. Each is graded 0–10 per task; the task score is their weighted average.`}
         />
 
@@ -222,8 +346,8 @@ export default function ContentReviewCriteriaPage() {
 
         {!loading && criteria.length === 0 && (
           <EmptyState
-            title="No criteria yet"
-            hint="Add the first one above — the review grid has nothing to grade against until then."
+            title={member ? `${member} has no criteria yet` : "No member selected"}
+            hint="Add the first one above, or copy someone else's list — the review grid has nothing to grade against until then."
           />
         )}
 

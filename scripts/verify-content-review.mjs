@@ -6,7 +6,8 @@
 //
 // What it is really testing is the "No Data is not 0" rule, in every place the
 // formula could quietly invent a zero: an ungraded cell, an ungraded task, a
-// month with no target, a month with nothing graded at all.
+// month with no target, a month with nothing graded at all — and, since
+// migration 008, a member with fewer than three graded months.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import nextEnv from "@next/env";
@@ -58,6 +59,27 @@ update public.content_review_batches b
  where b.id = $1
 returning b.*`;
 
+// Kept in step with loadRollingWindows() in lib/repositories/content-review.ts.
+const ROLLING = `
+select member_name, content_score, to_char(month, 'YYYY-MM-DD') as month_text, rn, scored_month_count
+from (
+  select member_name,
+         content_score,
+         month,
+         row_number() over (partition by member_name order by month desc) as rn,
+         count(*) over (partition by member_name) ::int as scored_month_count
+  from public.content_review_batches
+  where content_score is not null
+) ranked
+where rn <= 3 and member_name = $1
+order by month desc`;
+
+/** The same rule the repository applies: below three months there is no average. */
+function rollingAverage(rows) {
+  if (rows.length < 3) return null;
+  return rows.reduce((sum, row) => sum + Number(row.content_score), 0) / rows.length;
+}
+
 const results = [];
 function check(name, actual, expected) {
   const ok =
@@ -74,9 +96,9 @@ try {
   await client.query("begin");
 
   const { rows: criteria } = await client.query(
-    `insert into public.content_review_criteria (name, weight, sort_order) values
-       ('verify-content-review A', 1, 900),
-       ('verify-content-review B', 2, 901)
+    `insert into public.content_review_criteria (member_name, name, weight, sort_order) values
+       ('verify-content-review', 'verify-content-review A', 1, 900),
+       ('verify-content-review', 'verify-content-review B', 2, 901)
      returning id, name`,
   );
   const A = criteria.find((row) => row.name.endsWith(" A")).id;
@@ -151,6 +173,73 @@ try {
   check("no grades left · avg_quality_pct", batch.avg_quality_pct, null);
   check("no grades left · content_score", batch.content_score, null);
   check("no grades left · the tasks still exist", batch.task_count, 2);
+
+  // ------------------------------------------------------ notes and checklists
+
+  // A note is not an input to the arithmetic. Writing one must not move a figure.
+  const beforeNote = (await client.query(RECOMPUTE, [batchId])).rows[0];
+  await client.query("update public.content_review_tasks set note = $2 where id = $1", [task3, "reads well"]);
+  const afterNote = (await client.query(RECOMPUTE, [batchId])).rows[0];
+  check("a note leaves avg_quality_pct alone", afterNote.avg_quality_pct, beforeNote.avg_quality_pct);
+  check("a note leaves content_score alone", afterNote.content_score, beforeNote.content_score);
+
+  // One checklist per member: the same criterion name twice for one member is
+  // the one thing the key forbids, because it would double that item's weight.
+  try {
+    await client.query("savepoint duplicate_criterion");
+    await client.query(
+      `insert into public.content_review_criteria (member_name, name) values
+         ('verify-content-review', 'verify-content-review A')`,
+    );
+    check("duplicate (member, criterion name) rejected", "accepted", "rejected");
+  } catch {
+    await client.query("rollback to savepoint duplicate_criterion");
+    check("duplicate (member, criterion name) rejected", "rejected", "rejected");
+  }
+
+  // The same name under a different member is a different checklist entirely.
+  await client.query(
+    `insert into public.content_review_criteria (member_name, name) values
+       ('verify-content-review other', 'verify-content-review A')`,
+  );
+  check("the same criterion name under another member is allowed", "accepted", "accepted");
+
+  // ------------------------------------------------------- rolling 3-month avg
+
+  // Three months, scored 60 / 70 / 80, plus an ungraded fourth. The average is
+  // over the three that carry a score, and the blank month neither counts as a
+  // month nor drags the figure down.
+  await client.query(
+    `insert into public.content_review_batches (member_name, month, min_post, avg_quality_pct, task_count, completion_pct, content_score)
+     values
+       ('verify-rolling', '2999-01-01', 5, 60, 5, 100, 60),
+       ('verify-rolling', '2999-02-01', 5, 70, 5, 100, 70),
+       ('verify-rolling', '2999-04-01', 5, 0, 0, null, null)`,
+  );
+
+  let window = (await client.query(ROLLING, ["verify-rolling"])).rows;
+  check("two scored months · window size", window.length, 2);
+  check("two scored months · no average yet", rollingAverage(window), null);
+
+  await client.query(
+    `insert into public.content_review_batches (member_name, month, min_post, avg_quality_pct, task_count, completion_pct, content_score)
+     values ('verify-rolling', '2999-03-01', 5, 80, 5, 100, 80)`,
+  );
+
+  window = (await client.query(ROLLING, ["verify-rolling"])).rows;
+  check("three scored months · average of the three", rollingAverage(window), 70);
+  check("three scored months · newest month first", window[0].month_text, "2999-03-01");
+  check("the blank month is not in the window", window.some((row) => row.month_text === "2999-04-01"), "false");
+
+  // A fourth scored month rolls the window forward: the oldest one drops out.
+  await client.query(
+    `insert into public.content_review_batches (member_name, month, min_post, avg_quality_pct, task_count, completion_pct, content_score)
+     values ('verify-rolling', '2999-05-01', 5, 100, 5, 100, 100)`,
+  );
+  window = (await client.query(ROLLING, ["verify-rolling"])).rows;
+  check("window rolls forward · size stays 3", window.length, 3);
+  check("window rolls forward · average of the newest three", rollingAverage(window), (100 + 80 + 70) / 3);
+  check("window rolls forward · the oldest month dropped out", window.some((row) => row.content_score === "60"), "false");
 
   // One batch per (member, month) — the key the whole feature relies on.
   try {

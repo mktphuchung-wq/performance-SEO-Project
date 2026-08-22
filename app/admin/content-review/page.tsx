@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, CardHeader, EmptyState, Field, PageHeader, inputClass } from "@/components/ui";
 import { StatCard } from "@/components/StatCard";
 import { currentMonthInputValue, formatMonthLabel, normalizeMonth } from "@/lib/content-review/month";
@@ -56,12 +56,19 @@ function shortUrls(urls: string): string {
   return `${lines[0]} +${lines.length - 1} more`;
 }
 
+/** A note is saved this long after the last keystroke, and immediately on blur. */
+const NOTE_DEBOUNCE_MS = 600;
+
 /**
  * Content KPI — the manual review screen.
  *
  * It grades work a human judged, so it deliberately looks nothing like the
  * Official KPI pages: no range switcher, no Search Console anywhere. One member,
  * one calendar month, one grid.
+ *
+ * The columns of that grid belong to the member being reviewed: since migration
+ * 008 each person has their own checklist, so switching member changes what the
+ * work is measured against, not just whose work is listed.
  *
  * Every number in the totals panel comes back from the API after each write
  * rather than being recomputed in the browser, so what the reviewer reads is
@@ -85,6 +92,15 @@ export default function AdminContentReviewPage() {
   const [committed, setCommitted] = useState<Record<string, string>>({});
   const [savingCells, setSavingCells] = useState<Record<string, boolean>>({});
 
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  // What the server holds, kept in a ref rather than state: it is only ever read
+  // by a save that fires long after the keystroke that scheduled it, and a stale
+  // render copy there would re-send a note that was already stored.
+  const committedNotes = useRef<Record<string, string>>({});
+  // One pending timer per task, so typing in two notes cannot make the second
+  // one cancel the first one's save.
+  const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
   const [pasteText, setPasteText] = useState("");
   const [preview, setPreview] = useState<{ rows: ParsedTaskRow[]; warnings: string[] } | null>(null);
   const [importing, setImporting] = useState(false);
@@ -106,6 +122,9 @@ export default function AdminContentReviewPage() {
     const fromServer = cellsFromScores(next.scores);
     setCells(fromServer);
     setCommitted(fromServer);
+    const storedNotes = Object.fromEntries(next.tasks.map((task) => [task.id, task.note ?? ""]));
+    setNotes(storedNotes);
+    committedNotes.current = storedNotes;
   }, []);
 
   const requestKey = `${member}|${month}`;
@@ -134,6 +153,17 @@ export default function AdminContentReviewPage() {
   }, [member, month, requestKey, applyBatch]);
 
   useEffect(load, [load]);
+
+  // A pending note save belongs to the screen that scheduled it. Leaving the
+  // page or switching member drops the timer rather than firing it against a
+  // task the reviewer is no longer looking at — the blur that always precedes
+  // either action has already written the note.
+  useEffect(() => {
+    const timers = noteTimers.current;
+    return () => {
+      for (const timer of Object.values(timers)) clearTimeout(timer);
+    };
+  }, []);
 
   const loading = Boolean(member) && isReviewableMonth(month) && loadedKey !== requestKey;
   const batch = loadedKey === requestKey ? data?.batch ?? null : null;
@@ -220,6 +250,48 @@ export default function AdminContentReviewPage() {
     }
   }
 
+  /**
+   * Writes one task's note. Nothing recomputes: a note explains a grade, it is
+   * not one, so no figure on this screen can move because of it.
+   */
+  async function saveNote(taskId: string, next: string) {
+    clearTimeout(noteTimers.current[taskId]);
+    if (next === (committedNotes.current[taskId] ?? "")) return;
+
+    // Recorded before the request, not after: a second keystroke landing while
+    // this one is in flight compares against what is being sent, so the two do
+    // not race to write the same text twice.
+    committedNotes.current[taskId] = next;
+
+    try {
+      const res = await fetch(`/api/admin/content-review/task/${taskId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note: next }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error ?? "Could not save this note");
+
+      setData((current) =>
+        current
+          ? { ...current, tasks: current.tasks.map((task) => (task.id === taskId ? payload.task : task)) }
+          : current,
+      );
+      setError(null);
+    } catch (err) {
+      // The write did not land, so the note is not stored — forget the optimistic
+      // record of it, or a retry would be skipped as a no-op.
+      delete committedNotes.current[taskId];
+      setError((err as Error).message);
+    }
+  }
+
+  function changeNote(taskId: string, value: string) {
+    setNotes((current) => ({ ...current, [taskId]: value }));
+    clearTimeout(noteTimers.current[taskId]);
+    noteTimers.current[taskId] = setTimeout(() => void saveNote(taskId, value), NOTE_DEBOUNCE_MS);
+  }
+
   async function runPreview() {
     if (!batch) return;
     const res = await fetch(`/api/admin/content-review/batch/${batch.id}/paste`, {
@@ -251,6 +323,11 @@ export default function AdminContentReviewPage() {
       setPasteText("");
       setPreview(null);
       setError(null);
+      const importedNotes = Object.fromEntries(
+        (payload.tasks as ContentReviewTask[]).map((task) => [task.id, task.note ?? ""]),
+      );
+      setNotes(importedNotes);
+      committedNotes.current = importedNotes;
       setData((current) =>
         current ? { ...current, batch: payload.batch, tasks: payload.tasks, scores: payload.scores } : current,
       );
@@ -263,6 +340,9 @@ export default function AdminContentReviewPage() {
 
   async function removeTask(taskId: string) {
     if (!batch) return;
+    // Any note still waiting on its debounce would be written to a row that no
+    // longer exists.
+    clearTimeout(noteTimers.current[taskId]);
     const res = await fetch(`/api/admin/content-review/task/${taskId}`, { method: "DELETE" });
     const payload = await res.json();
     if (!res.ok) {
@@ -290,10 +370,10 @@ export default function AdminContentReviewPage() {
         description="Quality graded by hand against the checklist, plus how much of the monthly target was delivered. Independent of Official KPI — nothing here touches Search Console."
         action={
           <Link
-            href="/admin/content-review/criteria"
+            href="/admin/content-review/settings"
             className="rounded-lg border border-line-strong px-3.5 py-2 text-sm font-medium text-ink transition-colors hover:bg-neutral-soft"
           >
-            Manage checklist
+            Manage checklists
           </Link>
         }
       />
@@ -316,7 +396,10 @@ export default function AdminContentReviewPage() {
                 </option>
               ))}
             </select>
-            <span className="text-xs text-ink-subtle">Names come from the Sheet, aliases, and months already reviewed</span>
+            <span className="text-xs text-ink-subtle">
+              Names come from the Sheet, aliases, and months already reviewed. The grid below uses this member&apos;s own
+              checklist.
+            </span>
           </Field>
 
           <Field label="Month">
@@ -459,15 +542,15 @@ export default function AdminContentReviewPage() {
       <Card>
         <CardHeader
           title={`Review grid${batch ? ` — ${formatMonthLabel(batch.month)}` : ""}`}
-          description="Each cell is 0–10. Leave a cell empty while you have not judged it: empty is dropped from the average, 0 says the work failed that criterion."
+          description="Each cell is 0–10, graded against this member's own checklist. Leave a cell empty while you have not judged it: empty is dropped from the average, 0 says the work failed that criterion. The note is yours — it never affects a score."
         />
 
         {loading && <p className="px-5 py-10 text-center text-sm text-ink-muted">Loading…</p>}
 
         {!loading && batch && columns.length === 0 && (
           <EmptyState
-            title="The checklist is empty"
-            hint="Add criteria under Manage checklist before grading — there is nothing to grade against yet."
+            title={`${member} has no checklist yet`}
+            hint="Open Manage checklists to add criteria, or copy another member's list — there is nothing to grade against until then."
           />
         )}
 
@@ -491,6 +574,7 @@ export default function AdminContentReviewPage() {
                     </th>
                   ))}
                   <th className="px-4 py-2.5 text-right font-medium">Quality</th>
+                  <th className="px-4 py-2.5 font-medium">Note</th>
                   <th className="px-4 py-2.5" />
                 </tr>
               </thead>
@@ -538,6 +622,21 @@ export default function AdminContentReviewPage() {
 
                     <td className="whitespace-nowrap px-4 py-2 text-right numeric text-ink">
                       {formatPercent(rowQuality(task.id))}
+                    </td>
+                    <td className="px-4 py-2">
+                      {/* Free text, one per task rather than one per graded cell:
+                          the reviewer is writing down what they thought of the
+                          piece, and splitting that across the checklist columns
+                          would make them say it several times. */}
+                      <textarea
+                        value={notes[task.id] ?? ""}
+                        onChange={(e) => changeNote(task.id, e.target.value)}
+                        onBlur={() => void saveNote(task.id, notes[task.id] ?? "")}
+                        rows={2}
+                        placeholder="Why this grade…"
+                        aria-label={`Note for ${task.task_title || "task"}`}
+                        className={`${inputClass} min-w-[180px] resize-y text-[13px]`}
+                      />
                     </td>
                     <td className="px-2 py-2 text-right">
                       <Button variant="danger" onClick={() => void removeTask(task.id)}>

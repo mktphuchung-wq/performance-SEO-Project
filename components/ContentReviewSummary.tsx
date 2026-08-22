@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardHeader, EmptyState } from "@/components/ui";
 import { formatMonthLabel } from "@/lib/content-review/month";
 import { formatContentScore, formatPercent } from "@/lib/format";
@@ -14,48 +13,32 @@ import type { ContentReviewBatch } from "@/lib/repositories/content-review";
  * the months that have not been graded yet, which show "—" rather than a 0 that
  * would read as a failure.
  *
+ * The history is passed in rather than fetched here: the three headline figures
+ * above it come from the same response, and two fetches of one endpoint could
+ * render a month in the card that the table below does not list.
+ *
  * It sits beside the Official KPI card, never merged into it. The two answer
  * different questions (did the traffic grow / was the work good) and averaging
  * them would hide both.
  */
-export function ContentReviewSummary() {
-  const [batches, setBatches] = useState<ContentReviewBatch[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    fetch("/api/me/content-review")
-      .then((r) => r.json())
-      .catch(() => ({ batches: [] }))
-      .then((res: { batches?: ContentReviewBatch[] }) => {
-        if (cancelled) return;
-        setBatches(res.batches ?? []);
-        setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
+export function ContentReviewSummary({ history, loading }: { history: ContentReviewBatch[]; loading: boolean }) {
   return (
     <Card>
       <CardHeader
-        title="Content KPI"
-        description="Quality of the work itself, graded by hand against the team checklist — 0.8 × quality + 0.2 × how much of the monthly target was delivered. Separate from Performance KPI above."
+        title="Content KPI — every reviewed month"
+        description="Quality of the work itself, graded by hand against your checklist — 0.8 × quality + 0.2 × how much of the monthly target was delivered. Separate from Performance KPI above."
       />
 
       {loading && <p className="px-5 py-8 text-center text-sm text-ink-muted">Loading…</p>}
 
-      {!loading && batches.length === 0 && (
+      {!loading && history.length === 0 && (
         <EmptyState
           title="No month has been reviewed yet"
           hint="This score appears once an admin has graded a month of your work."
         />
       )}
 
-      {!loading && batches.length > 0 && (
+      {!loading && history.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-line text-xs uppercase tracking-wide text-ink-subtle">
@@ -68,7 +51,7 @@ export function ContentReviewSummary() {
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {batches.map((batch) => (
+              {history.map((batch) => (
                 <tr key={batch.id}>
                   <td className="px-5 py-2.5 text-ink">
                     {formatMonthLabel(batch.month)}

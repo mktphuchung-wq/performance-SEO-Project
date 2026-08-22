@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ContentKpiSummaryTable } from "@/components/ContentKpiSummaryTable";
 import { KpiSummaryTable } from "@/components/KpiSummaryTable";
 import { MemberCompositeTable } from "@/components/MemberCompositeTable";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
@@ -172,6 +173,11 @@ export default function AdminKpiPage() {
           <MemberCompositeTable rows={composite.rows} />
         )}
       </Card>
+
+      {/* Sits directly under Official KPI so both scores for a member can be read
+          in one glance, without either table having to explain the other's
+          window. */}
+      <ContentKpiSummaryTable title="Content KPI by member" />
 
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
         <div>

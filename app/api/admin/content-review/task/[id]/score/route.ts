@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { getCriterion, getTaskById, recomputeBatch, upsertScore } from "@/lib/repositories/content-review";
+import {
+  getBatchById,
+  getCriterion,
+  getTaskById,
+  recomputeBatch,
+  upsertScore,
+} from "@/lib/repositories/content-review";
 
 /**
  * Grades one cell (task x criterion) on the 0–10 scale and returns the batch it
@@ -10,6 +16,11 @@ import { getCriterion, getTaskById, recomputeBatch, upsertScore } from "@/lib/re
  * A null or empty score clears the cell instead of storing 0. The two are
  * different claims: 0 says the work failed this criterion, empty says nobody has
  * looked yet, and only the first one should cost the member anything.
+ *
+ * The criterion has to belong to the same member as the batch. Migration 008
+ * deliberately leaves that rule out of the schema — enforcing it there would
+ * mean a trigger joining three tables on every grade — so it is enforced here,
+ * the one place a grade can be created.
  */
 export async function PUT(req: Request, ctx: RouteContext<"/api/admin/content-review/task/[id]/score">) {
   const { id } = await ctx.params;
@@ -25,9 +36,21 @@ export async function PUT(req: Request, ctx: RouteContext<"/api/admin/content-re
     return NextResponse.json({ error: "criteriaId is required" }, { status: 400 });
   }
 
-  const criterion = await getCriterion(criteriaId);
+  const [criterion, batch] = await Promise.all([getCriterion(criteriaId), getBatchById(task.batch_id)]);
   if (!criterion) {
     return NextResponse.json({ error: "Criterion not found" }, { status: 404 });
+  }
+  if (!batch) {
+    return NextResponse.json({ error: "Batch not found" }, { status: 404 });
+  }
+
+  if (criterion.member_name !== batch.member_name) {
+    return NextResponse.json(
+      {
+        error: `"${criterion.name}" belongs to ${criterion.member_name}'s checklist, not ${batch.member_name}'s. Grade this month against ${batch.member_name}'s own criteria.`,
+      },
+      { status: 400 },
+    );
   }
 
   let score: number | null = null;
@@ -39,7 +62,7 @@ export async function PUT(req: Request, ctx: RouteContext<"/api/admin/content-re
   }
 
   await upsertScore(id, criteriaId, score);
-  const batch = await recomputeBatch(task.batch_id);
+  const recomputed = await recomputeBatch(task.batch_id);
 
-  return NextResponse.json({ ok: true, taskId: id, criteriaId, score, batch });
+  return NextResponse.json({ ok: true, taskId: id, criteriaId, score, batch: recomputed });
 }

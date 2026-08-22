@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { MemberComparisonTable } from "@/components/MemberComparisonTable";
+import { ContentKpiSummaryTable } from "@/components/ContentKpiSummaryTable";
 import { KpiScoreTable } from "@/components/KpiScoreTable";
 import { Card, CardHeader, PageHeader } from "@/components/ui";
 import { RANGE_LABELS } from "@/lib/format";
@@ -59,6 +60,11 @@ export default function AdminMembersPage() {
         description="Every member's URLs rolled up. Counts read URLs / URLs with data."
         action={<RangeSwitcher value={range} onChange={setRange} />}
       />
+
+      {/* The manually reviewed KPI, as its own card above the Search Console one.
+          It follows the calendar, not the range switcher in the header — see the
+          component for why the two are not merged into one table. */}
+      <ContentKpiSummaryTable />
 
       <Card>
         <CardHeader

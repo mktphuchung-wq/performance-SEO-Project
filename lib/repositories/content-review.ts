@@ -6,10 +6,15 @@ import { query, queryOne } from "@/lib/db";
  * Everything here is independent of Official KPI on purpose (see migration 007):
  * different source, different cadence, different tables. Nothing in this file
  * reads or writes kpi_settings, url_performance_score or member_kpi_weights.
+ *
+ * Since migration 008 a checklist belongs to one member rather than the team, so
+ * every criteria call takes a member name. That is what makes a criterion
+ * something set up once per person and reused every month.
  */
 
 export interface ContentReviewCriterion {
   id: string;
+  member_name: string;
   name: string;
   weight: number;
   is_active: boolean;
@@ -43,6 +48,7 @@ export interface ContentReviewTask {
   work_type: string;
   task_title: string;
   urls: string;
+  note: string;
   source_row_number: number | null;
   quality_pct: number | null;
   created_at: string;
@@ -58,10 +64,16 @@ export interface ContentReviewScore {
 
 // ------------------------------------------------------------------ criteria
 
-export async function listCriteria(includeInactive = true): Promise<ContentReviewCriterion[]> {
-  const where = includeInactive ? "" : "where is_active = true";
+export async function listCriteria(
+  memberName: string,
+  includeInactive = true,
+): Promise<ContentReviewCriterion[]> {
+  const where = includeInactive ? "" : "and is_active = true";
   return query<ContentReviewCriterion>(
-    `select * from public.content_review_criteria ${where} order by sort_order, created_at`,
+    `select * from public.content_review_criteria
+     where member_name = $1 ${where}
+     order by sort_order, created_at`,
+    [memberName],
   );
 }
 
@@ -69,21 +81,36 @@ export async function getCriterion(id: string): Promise<ContentReviewCriterion |
   return queryOne<ContentReviewCriterion>("select * from public.content_review_criteria where id = $1", [id]);
 }
 
-/** New criteria land at the end of the list unless the caller places them. */
+/** How many members already have a checklist, so the settings page can say so. */
+export async function countCriteriaByMember(): Promise<Map<string, number>> {
+  const rows = await query<{ member_name: string; active_count: string }>(
+    `select member_name, count(*) filter (where is_active) ::text as active_count
+     from public.content_review_criteria
+     group by member_name`,
+  );
+  return new Map(rows.map((row) => [row.member_name, Number(row.active_count)]));
+}
+
+/**
+ * New criteria land at the end of that member's list unless the caller places
+ * them — sort_order is per member, so the max is taken within the member.
+ */
 export async function createCriterion(input: {
+  memberName: string;
   name: string;
   weight?: number;
   sortOrder?: number;
 }): Promise<ContentReviewCriterion> {
   const row = await queryOne<ContentReviewCriterion>(
-    `insert into public.content_review_criteria (name, weight, sort_order)
+    `insert into public.content_review_criteria (member_name, name, weight, sort_order)
      values (
        $1,
-       coalesce($2, 1),
-       coalesce($3, (select coalesce(max(sort_order), 0) + 10 from public.content_review_criteria))
+       $2,
+       coalesce($3, 1),
+       coalesce($4, (select coalesce(max(sort_order), 0) + 10 from public.content_review_criteria where member_name = $1))
      )
      returning *`,
-    [input.name, input.weight ?? null, input.sortOrder ?? null],
+    [input.memberName, input.name, input.weight ?? null, input.sortOrder ?? null],
   );
   if (!row) throw new Error("Failed to create content review criterion");
   return row;
@@ -93,6 +120,9 @@ export async function createCriterion(input: {
  * The only columns a patch may touch. Column names cannot be parameterized, so
  * they are interpolated — this allowlist is what keeps a request body from
  * naming an arbitrary column, the same guard kpi-settings.ts uses.
+ *
+ * member_name is deliberately not on it: moving a criterion between members
+ * would drag every grade already given under it onto someone else's month.
  */
 const CRITERIA_PATCH_COLUMNS = {
   name: "name",
@@ -123,6 +153,31 @@ export async function updateCriterion(id: string, patch: CriterionPatch): Promis
 }
 
 /**
+ * Clones one member's active checklist onto another as brand new rows.
+ *
+ * A copy, never a link: the two lists share nothing afterwards, so retuning a
+ * weight for the person who was copied from cannot silently rescore months
+ * belonging to the person who was copied to. That independence is the reason
+ * checklists became per-member in the first place.
+ *
+ * Names already present on the target are skipped rather than overwritten —
+ * copying onto a half-built checklist should add what is missing, not reset what
+ * is there.
+ */
+export async function copyCriteria(fromMember: string, toMember: string): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `insert into public.content_review_criteria (member_name, name, weight, is_active, sort_order)
+     select $2, source.name, source.weight, true, source.sort_order
+     from public.content_review_criteria source
+     where source.member_name = $1 and source.is_active = true
+     on conflict (member_name, name) do nothing
+     returning id`,
+    [fromMember, toMember],
+  );
+  return rows.length;
+}
+
+/**
  * How many grades already reference this criterion. Deleting it would cascade
  * them away, so the API refuses and offers deactivation instead — the record of
  * how a past month was graded should survive an edit to the checklist.
@@ -149,6 +204,16 @@ export async function listBatchIdsScoredWithCriterion(criteriaId: string): Promi
     [criteriaId],
   );
   return rows.map((row) => row.batch_id);
+}
+
+/** Members who already have a checklist, for the "copy from…" picker. */
+export async function listMembersWithCriteria(): Promise<string[]> {
+  const rows = await query<{ member_name: string }>(
+    `select distinct member_name from public.content_review_criteria
+     where is_active = true
+     order by member_name`,
+  );
+  return rows.map((row) => row.member_name);
 }
 
 // ------------------------------------------------------------------- batches
@@ -269,6 +334,18 @@ export async function getTaskById(id: string): Promise<ContentReviewTask | null>
   return queryOne<ContentReviewTask>("select * from public.content_review_tasks where id = $1", [id]);
 }
 
+/**
+ * The reviewer's own words about one task. It is never read by the scoring
+ * arithmetic — a note explains a grade, it does not make one — so writing it
+ * cannot move a single number, and no recompute follows.
+ */
+export async function updateTaskNote(id: string, note: string): Promise<ContentReviewTask | null> {
+  return queryOne<ContentReviewTask>(
+    "update public.content_review_tasks set note = $2, updated_at = now() where id = $1 returning *",
+    [id, note],
+  );
+}
+
 export async function deleteTask(id: string): Promise<void> {
   await query("delete from public.content_review_tasks where id = $1", [id]);
 }
@@ -357,4 +434,133 @@ export async function recomputeBatch(batchId: string): Promise<ContentReviewBatc
      returning b.*`,
     [batchId],
   );
+}
+
+// ------------------------------------------------------------------- summary
+
+/**
+ * What every summary card shows for one member: the two calendar months anyone
+ * would ask about, and the rolling three-month figure.
+ */
+export interface ContentKpiSummaryRow {
+  memberName: string;
+  thisMonth: ContentReviewBatch | null;
+  previousMonth: ContentReviewBatch | null;
+  /** Average of the three most recent scored months, or null below three. */
+  threeMonthAvg: number | null;
+  /** The months that average is built from, newest first — 0 to 3 of them. */
+  threeMonthMonths: string[];
+  /** How many months this member has ever been scored on, for "needs N more". */
+  scoredMonthCount: number;
+}
+
+interface RollingRow {
+  member_name: string;
+  content_score: number;
+  month: string;
+  rn: number;
+  scored_month_count: number;
+}
+
+/**
+ * The rolling window, for every member at once.
+ *
+ * Rolling, not quarterly: the window is the three most recent months that
+ * actually carry a score, so it moves forward on its own as months are reviewed.
+ * A month nobody reviewed is skipped rather than treated as a gap to stop at —
+ * the alternative would freeze a member's three-month figure the first time a
+ * month was missed.
+ *
+ * scored_month_count travels with it so a caller can say how many more months a
+ * member needs instead of showing a bare "—".
+ */
+async function loadRollingWindows(): Promise<Map<string, RollingRow[]>> {
+  const rows = await query<RollingRow>(
+    `select member_name, content_score, month, rn, scored_month_count
+     from (
+       select member_name,
+              content_score,
+              month,
+              row_number() over (partition by member_name order by month desc) as rn,
+              count(*) over (partition by member_name) ::int as scored_month_count
+       from public.content_review_batches
+       where content_score is not null
+     ) ranked
+     where rn <= 3
+     order by member_name, month desc`,
+  );
+
+  const byMember = new Map<string, RollingRow[]>();
+  for (const row of rows) {
+    const list = byMember.get(row.member_name) ?? [];
+    list.push(row);
+    byMember.set(row.member_name, list);
+  }
+  return byMember;
+}
+
+/**
+ * Deliberately not "the last three months that exist": three is the whole point
+ * of the number, and averaging two of them would quietly compare a member with
+ * two months against a member with three.
+ */
+const ROLLING_MONTHS = 3;
+
+function rollingAverage(window: RollingRow[] | undefined): number | null {
+  if (!window || window.length < ROLLING_MONTHS) return null;
+  return window.reduce((sum, row) => sum + Number(row.content_score), 0) / window.length;
+}
+
+/**
+ * Content KPI for a list of members: this calendar month, last calendar month,
+ * and the rolling three-month average.
+ *
+ * "This month" is the literal calendar month, not "the newest month with data".
+ * A month still being reviewed reads "—", which is the honest answer — falling
+ * back to an older month to have something to show would put a June score under
+ * an August heading.
+ *
+ * Members are passed in rather than derived here so the same list the member
+ * picker offers is the list that gets a row, including anyone who has never been
+ * reviewed. They show as all-blank, which is what they are.
+ */
+export async function getContentKpiSummary(
+  memberNames: string[],
+  thisMonth: string,
+  previousMonth: string,
+): Promise<ContentKpiSummaryRow[]> {
+  if (memberNames.length === 0) return [];
+
+  const [months, windows] = await Promise.all([
+    query<ContentReviewBatch>(
+      `select * from public.content_review_batches
+       where member_name = any($1::text[]) and month in ($2::date, $3::date)`,
+      [memberNames, thisMonth, previousMonth],
+    ),
+    loadRollingWindows(),
+  ]);
+
+  const byKey = new Map(months.map((batch) => [`${batch.member_name}|${batch.month}`, batch]));
+
+  return memberNames.map((memberName) => {
+    const window = windows.get(memberName);
+    return {
+      memberName,
+      thisMonth: byKey.get(`${memberName}|${thisMonth}`) ?? null,
+      previousMonth: byKey.get(`${memberName}|${previousMonth}`) ?? null,
+      threeMonthAvg: rollingAverage(window),
+      threeMonthMonths: (window ?? []).map((row) => row.month),
+      scoredMonthCount: window?.[0]?.scored_month_count ?? 0,
+    };
+  });
+}
+
+/** The same figures for one member — what a member sees about themselves. */
+export async function getContentKpiForMember(
+  memberName: string,
+  thisMonth: string,
+  previousMonth: string,
+): Promise<ContentKpiSummaryRow> {
+  const [row] = await getContentKpiSummary([memberName], thisMonth, previousMonth);
+  return row;
 }

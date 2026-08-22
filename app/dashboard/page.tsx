@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ContentKpiCard, type ContentKpiCardData } from "@/components/ContentKpiCard";
 import { ContentReviewSummary } from "@/components/ContentReviewSummary";
 import { MemberKpiSummary } from "@/components/MemberKpiSummary";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
@@ -10,6 +11,7 @@ import { MetricDeltaInline } from "@/components/MetricDelta";
 import { Card, CardHeader, PageHeader } from "@/components/ui";
 import { RANGE_LABELS, formatCtr, formatNumber, formatScore } from "@/lib/format";
 import type { MemberCompositeKpi } from "@/lib/performance/composite-score";
+import type { ContentReviewBatch } from "@/lib/repositories/content-review";
 import { DEFAULT_RANGE_KEY, isRollingRange, type RangeKey } from "@/lib/ranges";
 import type { MemberRollupRow } from "@/lib/repositories/rollups";
 import type { MemberScoreRow } from "@/lib/repositories/kpi-score-rollups";
@@ -21,6 +23,9 @@ export default function DashboardPage() {
   const [score, setScore] = useState<MemberScoreRow | null>(null);
   const [summary, setSummary] = useState<MemberCompositeKpi | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [contentKpi, setContentKpi] = useState<ContentKpiCardData | null>(null);
+  const [contentHistory, setContentHistory] = useState<ContentReviewBatch[]>([]);
+  const [contentLoading, setContentLoading] = useState(true);
   const [loading, setLoading] = useState(true);
 
   const scoreable = isRollingRange(range as RangeKey);
@@ -38,6 +43,36 @@ export default function DashboardPage() {
         if (cancelled) return;
         setSummary(res.summary ?? null);
         setSummaryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Content KPI runs on calendar months, so like Official KPI it is fetched once
+  // and left alone when the range changes. One request feeds both the three
+  // headline figures and the month-by-month table under them.
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/me/content-review")
+      .then((r) => r.json())
+      .catch(() => null)
+      .then((res) => {
+        if (cancelled) return;
+        if (res) {
+          setContentKpi({
+            thisMonth: res.thisMonth ?? null,
+            previousMonth: res.previousMonth ?? null,
+            threeMonthAvg: res.threeMonthAvg ?? null,
+            threeMonthMonths: res.threeMonthMonths ?? [],
+            scoredMonthCount: res.scoredMonthCount ?? 0,
+            monthLabels: res.monthLabels ?? null,
+          });
+          setContentHistory(res.history ?? []);
+        }
+        setContentLoading(false);
       });
 
     return () => {
@@ -80,7 +115,8 @@ export default function DashboardPage() {
           article was any good, so a human grades that separately. It is stacked
           below rather than merged in — one number that averaged traffic growth
           with a review score would explain neither. */}
-      <ContentReviewSummary />
+      <ContentKpiCard data={contentKpi} loading={contentLoading} />
+      <ContentReviewSummary history={contentHistory} loading={contentLoading} />
 
       {/* The switcher sits below the KPI, next to what it actually controls.
           Putting it in the page header made it look like it governed everything

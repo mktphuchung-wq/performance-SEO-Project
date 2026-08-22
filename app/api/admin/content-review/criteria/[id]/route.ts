@@ -51,7 +51,20 @@ export async function PATCH(_req: Request, ctx: RouteContext<"/api/admin/content
     patch.sortOrder = sortOrder;
   }
 
-  const criterion = await updateCriterion(id, patch);
+  let criterion;
+  try {
+    criterion = await updateCriterion(id, patch);
+  } catch (error) {
+    // Renaming onto a name this member already uses — the checklist is unique
+    // per (member, name) since migration 008.
+    if ((error as { code?: string }).code === "23505") {
+      return NextResponse.json(
+        { error: `${existing.member_name} already has a criterion called "${patch.name}".` },
+        { status: 409 },
+      );
+    }
+    throw error;
+  }
 
   // A weight is part of the arithmetic behind every cached quality figure, so
   // changing it makes those figures wrong until they are rebuilt. Deactivating
