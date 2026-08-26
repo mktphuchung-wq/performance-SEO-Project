@@ -19,23 +19,89 @@ interface TeamKpiSummary {
   memberCount: number;
 }
 
+interface RowsResponse<T> {
+  rows?: T[];
+  error?: string;
+}
+
 const EMPTY_KPI: TeamKpiSummary = { avgOfficialKpi: null, scoredMemberCount: 0, memberCount: 0 };
+
+async function fetchRows<T>(url: string, signal: AbortSignal): Promise<T[]> {
+  const response = await fetch(url, { signal });
+  const text = await response.text();
+
+  if (!text.trim()) {
+    console.error("Admin overview API returned an empty response", {
+      url,
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+    });
+    throw new Error(`Failed to load admin data: ${url} returned an empty response (${response.status}).`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    console.error("Admin overview API returned invalid JSON", {
+      url,
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      responsePreview: text.slice(0, 200),
+      error,
+    });
+    throw new Error(`Failed to load admin data: ${url} returned invalid JSON (${response.status}).`);
+  }
+
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    console.error("Admin overview API returned an invalid JSON payload", { url, status: response.status, payload });
+    throw new Error(`Failed to load admin data: ${url} returned an invalid JSON payload.`);
+  }
+
+  const body = payload as RowsResponse<T>;
+
+  if (!response.ok) {
+    console.error("Admin overview API request failed", { url, status: response.status, body });
+    throw new Error(body.error ?? `Failed to load admin data from ${url} (${response.status}).`);
+  }
+
+  if (body.rows !== undefined && !Array.isArray(body.rows)) {
+    console.error("Admin overview API returned an invalid rows payload", { url, status: response.status, body });
+    throw new Error(`Failed to load admin data: ${url} returned an invalid rows payload.`);
+  }
+
+  return body.rows ?? [];
+}
 
 export default function AdminOverviewPage() {
   const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [members, setMembers] = useState<MemberRollupRow[]>([]);
   const [projects, setProjects] = useState<ProjectRollupRow[]>([]);
   const [kpi, setKpi] = useState<TeamKpiSummary>(EMPTY_KPI);
+  const [error, setError] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     Promise.all([
-      fetch(`/api/admin/members?range=${range}`).then((r) => r.json()),
-      fetch(`/api/admin/projects?range=${range}`).then((r) => r.json()),
-    ]).then(([membersRes, projectsRes]) => {
-      setMembers(membersRes.rows ?? []);
-      setProjects(projectsRes.rows ?? []);
-    });
+      fetchRows<MemberRollupRow>(`/api/admin/members?range=${range}`, controller.signal),
+      fetchRows<ProjectRollupRow>(`/api/admin/projects?range=${range}`, controller.signal),
+    ])
+      .then(([memberRows, projectRows]) => {
+        if (controller.signal.aborted) return;
+        setMembers(memberRows);
+        setProjects(projectRows);
+        setError(null);
+      })
+      .catch((requestError: Error) => {
+        if (!controller.signal.aborted && requestError.name !== "AbortError") {
+          console.error("Failed to load admin overview", { range, error: requestError });
+          setError(requestError.message);
+        }
+      });
+
+    return () => controller.abort();
   }, [range, dataVersion]);
 
   // Avg Official KPI is built from 1M + 3M + 6M together, so it does not follow
@@ -65,6 +131,8 @@ export default function AdminOverviewPage() {
         description={`Aggregated across all members and projects — ${RANGE_LABELS[range] ?? range}.`}
         action={<RangeSwitcher value={range} onChange={setRange} />}
       />
+
+      {error && <p className="rounded-lg bg-negative-soft px-4 py-3 text-[13px] text-negative">{error}</p>}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
         <StatCard

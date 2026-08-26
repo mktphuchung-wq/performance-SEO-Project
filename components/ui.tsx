@@ -97,6 +97,41 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export const inputClass =
   "w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:bg-neutral-soft disabled:text-ink-muted";
 
+export function Checkbox({
+  label,
+  checked,
+  onChange,
+  disabled,
+  className = "",
+}: {
+  label: ReactNode;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <label
+      className={`inline-flex select-none items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+        disabled
+          ? "cursor-not-allowed border-line bg-neutral-soft text-ink-muted opacity-70"
+          : checked
+            ? "cursor-pointer border-accent bg-accent-soft text-ink"
+            : "cursor-pointer border-line-strong bg-surface text-ink hover:bg-neutral-soft"
+      } ${className}`}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-4 accent-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed"
+      />
+      <span>{label}</span>
+    </label>
+  );
+}
+
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="px-5 py-10 text-center">

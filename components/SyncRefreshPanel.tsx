@@ -2,10 +2,8 @@
 
 import { useState } from "react";
 import { RANGE_LABELS } from "@/lib/format";
-import { SELECTABLE_RANGE_KEYS } from "@/lib/ranges";
-import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
-
-const ALL_RANGES = "__all__";
+import { SELECTABLE_RANGE_KEYS, type RangeKey } from "@/lib/ranges";
+import { Button, Card, CardHeader, Checkbox } from "@/components/ui";
 
 interface RefreshRunState {
   id: string;
@@ -22,11 +20,14 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncFailed, setSyncFailed] = useState(false);
 
-  const [range, setRange] = useState(ALL_RANGES);
+  // Every range is cached independently, so refreshing is a multi-select: the
+  // 3M/6M views stay empty until they are refreshed too. Default to all of them.
+  const [selectedRanges, setSelectedRanges] = useState<RangeKey[]>([...SELECTABLE_RANGE_KEYS]);
   const [activeRange, setActiveRange] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [run, setRun] = useState<RefreshRunState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [doneRanges, setDoneRanges] = useState(0);
 
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
@@ -95,17 +96,29 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     }
   }
 
+  function toggleRange(rangeKey: RangeKey, checked: boolean) {
+    setSelectedRanges((current) => {
+      const next = checked ? [...current, rangeKey] : current.filter((key) => key !== rangeKey);
+      // Keep canonical order so the refresh always walks 1M → 3M → 6M → all time.
+      return SELECTABLE_RANGE_KEYS.filter((key) => next.includes(key));
+    });
+  }
+
+  function toggleAllRanges(checked: boolean) {
+    setSelectedRanges(checked ? [...SELECTABLE_RANGE_KEYS] : []);
+  }
+
   async function handleRefresh() {
+    if (selectedRanges.length === 0) return;
     setRefreshing(true);
     setRefreshError(null);
     setRun(null);
-    // Each range is cached independently, so "all ranges" walks them in turn —
-    // otherwise the 3M/6M views stay empty until they are refreshed too.
-    const targets = range === ALL_RANGES ? SELECTABLE_RANGE_KEYS : [range];
+    setDoneRanges(0);
     try {
-      for (const target of targets) {
+      for (const target of selectedRanges) {
         setActiveRange(target);
         await refreshRange(target);
+        setDoneRanges((count) => count + 1);
       }
       onDone?.();
     } catch (error) {
@@ -117,6 +130,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   }
 
   const progressPct = run?.total_urls ? (run.processed_urls / run.total_urls) * 100 : 0;
+  const allSelected = selectedRanges.length === SELECTABLE_RANGE_KEYS.length;
 
   return (
     <Card>
@@ -140,27 +154,38 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
         <div className="space-y-2 md:border-l md:border-line md:pl-5">
           <h3 className="text-[13px] font-medium text-ink">2 · Refresh Search Console</h3>
           <p className="text-[13px] leading-5 text-ink-muted">
-            Each range is cached separately — keep <strong>All ranges</strong> to fill the 1M / 3M / 6M views.
+            Each range is cached separately — tick every range you want filled. Selected ranges are refreshed one after
+            another.
           </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <Field label="Range">
-              <select
-                value={range}
-                onChange={(e) => setRange(e.target.value)}
-                className={inputClass}
+          <div className="space-y-2">
+            <span className="block text-xs font-medium text-ink-muted">Ranges</span>
+            <div className="flex flex-wrap gap-2">
+              <Checkbox
+                label="All ranges"
+                checked={allSelected}
+                onChange={toggleAllRanges}
                 disabled={refreshing}
-              >
-                <option value={ALL_RANGES}>All ranges</option>
-                {SELECTABLE_RANGE_KEYS.map((option) => (
-                  <option key={option} value={option}>
-                    {RANGE_LABELS[option]}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Button onClick={handleRefresh} disabled={refreshing || syncing}>
-              {refreshing ? "Refreshing…" : "Refresh now"}
+              />
+              {SELECTABLE_RANGE_KEYS.map((option) => (
+                <Checkbox
+                  key={option}
+                  label={RANGE_LABELS[option]}
+                  checked={selectedRanges.includes(option)}
+                  onChange={(checked) => toggleRange(option, checked)}
+                  disabled={refreshing}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <Button onClick={handleRefresh} disabled={refreshing || syncing || selectedRanges.length === 0}>
+              {refreshing
+                ? `Refreshing… (${doneRanges + 1}/${selectedRanges.length})`
+                : `Refresh ${selectedRanges.length} range${selectedRanges.length === 1 ? "" : "s"}`}
             </Button>
+            {selectedRanges.length === 0 && (
+              <span className="text-[13px] text-ink-muted">Select at least one range.</span>
+            )}
           </div>
 
           {run && (
