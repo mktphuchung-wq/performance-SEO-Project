@@ -1,8 +1,10 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { syncContentUrlsFromSheet } from "@/lib/sync/sheet";
-import { listRecentSyncRuns } from "@/lib/repositories/sync-runs";
+import { runSyncJob } from "@/lib/sync/sheet";
+import { ActiveSyncRunError, enqueueSyncRun, listRecentSyncRuns } from "@/lib/repositories/sync-runs";
+
+export const maxDuration = 300;
 
 export async function POST() {
   const session = await getServerSession(authOptions);
@@ -11,9 +13,20 @@ export async function POST() {
   }
 
   try {
-    const result = await syncContentUrlsFromSheet(session.accessToken, session.user?.email ?? null);
-    return NextResponse.json(result);
+    const run = await enqueueSyncRun(session.user?.email ?? null);
+    const accessToken = session.accessToken;
+    after(async () => {
+      try {
+        await runSyncJob(run.id, accessToken);
+      } catch (error) {
+        console.error(`Sync job ${run.id} failed`, error);
+      }
+    });
+    return NextResponse.json({ runId: run.id, status: run.status }, { status: 202 });
   } catch (error) {
+    if (error instanceof ActiveSyncRunError) {
+      return NextResponse.json({ error: error.message, runId: error.runId }, { status: 409 });
+    }
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 }

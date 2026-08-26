@@ -190,6 +190,9 @@ via `pg`, Google Sheets + Search Console APIs via `googleapis`, Recharts.
   rollups too: a range with no previous window stores `null` deltas, not `0`.
 - A URL gaining data with no prior-period baseline is recorded as `new_signal` (positive), not as a decline.
 - Migrations only ever add — never run destructive migrations against production data.
+- Sync and refresh are queued server-side and expose progress through lightweight status polling. Sheet writes use
+  hash-diffed bulk upserts in one transaction; GSC refreshes query all tracked pages by property with bounded
+  concurrency, retry/backoff, and an exact-URL fallback when a property rejects wide queries.
 
   Because of that rule, replacing the calendar-month ranges left their cached rows behind.
   Nothing reads them. To reclaim the space, run this by hand once (cache only — every value
@@ -231,7 +234,9 @@ via `pg`, Google Sheets + Search Console APIs via `googleapis`, Recharts.
    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
    ADMIN_EMAILS               # comma-separated, lowercase
    GOOGLE_SHEET_ID, GOOGLE_SHEET_TAB
-   DATABASE_URL
+    DATABASE_URL
+    SYNC_GSC_CONCURRENCY, SYNC_GSC_WIDE_QUERY
+    SYNC_BULK_CHUNK_SIZE, SYNC_STALE_RUN_MINUTES, SYNC_DATE_FORMAT_HINT
    ```
 
    Generate `NEXTAUTH_SECRET` with `openssl rand -base64 32`.

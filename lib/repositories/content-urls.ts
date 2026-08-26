@@ -1,8 +1,9 @@
-import { query, queryOne } from "@/lib/db";
+import { query, queryOne, type DbExecutor } from "@/lib/db";
 
 export interface ContentUrl {
   id: string;
   url_hash: string;
+  content_hash: string | null;
   project: string;
   url: string;
   member_name: string;
@@ -28,6 +29,63 @@ export interface UpsertContentUrlInput {
   gscProperty: string | null;
   workedAt: string | null;
   sourceRowNumber: number | null;
+}
+
+export interface BulkUpsertContentUrlInput extends UpsertContentUrlInput {
+  contentHash: string;
+}
+
+function executorQuery<T extends Record<string, unknown>>(db: DbExecutor | undefined, text: string, params?: unknown[]) {
+  return db ? db.query<T>(text, params).then((result) => result.rows) : query<T>(text, params);
+}
+
+export async function getContentHashMap(db?: DbExecutor): Promise<Map<string, { contentHash: string | null; isActive: boolean }>> {
+  const rows = await executorQuery<{ url_hash: string; content_hash: string | null; is_active: boolean }>(
+    db,
+    "select url_hash, content_hash, is_active from public.content_urls",
+  );
+  return new Map(rows.map((row) => [row.url_hash, { contentHash: row.content_hash, isActive: row.is_active }]));
+}
+
+export async function bulkUpsertContentUrls(rows: BulkUpsertContentUrlInput[], db?: DbExecutor): Promise<void> {
+  if (rows.length === 0) return;
+  await executorQuery(
+    db,
+    `insert into public.content_urls
+       (url_hash, content_hash, project, url, member_name, member_email, work_type, gsc_property,
+        worked_at, source_row_number, is_active, last_seen_at, updated_at)
+     select x.url_hash, x.content_hash, x.project, x.url, x.member_name, x.member_email, x.work_type,
+            x.gsc_property, x.worked_at, x.source_row_number, true, now(), now()
+     from jsonb_to_recordset($1::jsonb) as x(
+       url_hash text, content_hash text, project text, url text, member_name text, member_email text,
+       work_type text, gsc_property text, worked_at date, source_row_number integer
+     )
+     on conflict (url_hash) do update set
+       content_hash = excluded.content_hash,
+       project = excluded.project,
+       url = excluded.url,
+       member_name = excluded.member_name,
+       member_email = excluded.member_email,
+       work_type = excluded.work_type,
+       gsc_property = excluded.gsc_property,
+       worked_at = excluded.worked_at,
+       source_row_number = excluded.source_row_number,
+       is_active = true,
+       last_seen_at = now(),
+       updated_at = now()`,
+    [JSON.stringify(rows.map((row) => ({
+      url_hash: row.urlHash,
+      content_hash: row.contentHash,
+      project: row.project,
+      url: row.url,
+      member_name: row.memberName,
+      member_email: row.memberEmail,
+      work_type: row.workType,
+      gsc_property: row.gscProperty,
+      worked_at: row.workedAt,
+      source_row_number: row.sourceRowNumber,
+    })))],
+  );
 }
 
 export async function upsertContentUrl(input: UpsertContentUrlInput): Promise<{ id: string; inserted: boolean }> {
@@ -81,14 +139,16 @@ export async function setKpiExclusion(id: string, excluded: boolean, reason: str
   );
 }
 
-export async function deactivateMissingContentUrls(seenHashes: string[]): Promise<number> {
+export async function deactivateMissingContentUrls(seenHashes: string[], db?: DbExecutor): Promise<number> {
   if (seenHashes.length === 0) {
-    const rows = await query<{ id: string }>(
+    const rows = await executorQuery<{ id: string }>(
+      db,
       "update public.content_urls set is_active = false, updated_at = now() where is_active = true returning id",
     );
     return rows.length;
   }
-  const rows = await query<{ id: string }>(
+  const rows = await executorQuery<{ id: string }>(
+    db,
     `update public.content_urls
      set is_active = false, updated_at = now()
      where is_active = true and url_hash <> all($1::text[])
@@ -137,6 +197,11 @@ export async function getContentUrlById(id: string): Promise<ContentUrl | null> 
 export async function listContentUrlsByIds(ids: string[]): Promise<ContentUrl[]> {
   if (ids.length === 0) return [];
   return query<ContentUrl>("select * from public.content_urls where id = any($1::uuid[])", [ids]);
+}
+
+export async function listActiveContentUrlsByIds(ids: string[]): Promise<ContentUrl[]> {
+  if (ids.length === 0) return [];
+  return query<ContentUrl>("select * from public.content_urls where id = any($1::uuid[]) and is_active = true", [ids]);
 }
 
 export async function listContentUrlsMissingGscProperty(): Promise<ContentUrl[]> {

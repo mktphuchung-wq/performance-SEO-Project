@@ -1,4 +1,4 @@
-import { Pool, types } from "pg";
+import { Pool, types, type PoolClient, type QueryResultRow } from "pg";
 import { getDatabaseUrl } from "./env";
 
 // Postgres `date` columns come back as JS Date objects by default. Once one of
@@ -37,4 +37,28 @@ export async function query<T = Record<string, unknown>>(text: string, params?: 
 export async function queryOne<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T | null> {
   const rows = await query<T>(text, params);
   return rows[0] ?? null;
+}
+
+export interface DbExecutor {
+  query<T extends QueryResultRow = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+}
+
+export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const result = await fn(client);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function tryTransactionAdvisoryLock(client: PoolClient, key: number): Promise<boolean> {
+  const result = await client.query<{ locked: boolean }>("select pg_try_advisory_xact_lock($1) as locked", [key]);
+  return result.rows[0]?.locked ?? false;
 }

@@ -18,6 +18,7 @@ const statusTone: Record<string, BadgeTone> = {
   success: "positive",
   failed: "negative",
   running: "accent",
+  queued: "neutral",
 };
 
 function formatWhen(value: string | null): string {
@@ -120,6 +121,11 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
                   {run.total_rows} rows · {run.inserted_rows} new · {run.updated_rows} updated ·{" "}
                   {run.deactivated_rows} deactivated · {run.failed_rows} failed
                 </div>
+                {(run.sheet_read_ms !== null || run.db_write_ms !== null) && (
+                  <div className="numeric mt-1 text-xs text-ink-subtle">
+                    Sheet {run.sheet_read_ms ?? 0}ms · DB {run.db_write_ms ?? 0}ms · {run.rows_skipped_unchanged} unchanged
+                  </div>
+                )}
                 {run.error_message && <p className="mt-1 text-[13px] text-negative">{run.error_message}</p>}
               </li>
             ))}
@@ -138,6 +144,11 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
                   </span>
                   <Badge tone={statusTone[run.status] ?? "neutral"}>{run.status}</Badge>
                 </div>
+                {(run.gsc_query_ms !== null || run.db_write_ms !== null) && (
+                  <div className="numeric mt-1 text-xs text-ink-subtle">
+                    GSC {run.gsc_query_ms ?? 0}ms / {run.gsc_call_count} calls · DB {run.db_write_ms ?? 0}ms
+                  </div>
+                )}
                 <div className="numeric mt-1 text-[13px] text-ink-muted">
                   {run.processed_urls}/{run.total_urls} processed · {run.urls_with_data} with data ·{" "}
                   {run.no_data_urls} no data ·{" "}

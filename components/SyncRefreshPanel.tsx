@@ -13,6 +13,18 @@ interface RefreshRunState {
   urls_with_data: number;
   no_data_urls: number;
   failed_urls: number;
+  error_message?: string | null;
+}
+
+interface SyncRunState {
+  id: string;
+  status: string;
+  inserted_rows: number;
+  updated_rows: number;
+  deactivated_rows: number;
+  failed_rows: number;
+  rows_skipped_unchanged: number;
+  error_message: string | null;
 }
 
 export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
@@ -33,6 +45,34 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
   const [recomputeFailed, setRecomputeFailed] = useState(false);
+  function pollRun<T extends { status: string; error_message?: string | null }>(url: string, onUpdate: (run: T) => void): Promise<T> {
+    return new Promise((resolve, reject) => {
+      let inFlight = false;
+      const poll = async () => {
+        if (inFlight) return;
+        inFlight = true;
+        try {
+          const response = await fetch(url, { cache: "no-store" });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error ?? "Could not read run status");
+          const current = data.run as T;
+          onUpdate(current);
+          if (current.status === "success" || current.status === "failed") {
+            clearInterval(timer);
+            if (current.status === "failed") reject(new Error(current.error_message ?? "Job failed"));
+            else resolve(current);
+          }
+        } catch (error) {
+          clearInterval(timer);
+          reject(error);
+        } finally {
+          inFlight = false;
+        }
+      };
+      const timer = setInterval(poll, 2500);
+      void poll();
+    });
+  }
 
   async function handleRecompute() {
     setRecomputing(true);
@@ -59,9 +99,14 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     try {
       const res = await fetch("/api/sync/sheet", { method: "POST" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Sync failed");
+      if (!res.ok && res.status !== 409) throw new Error(data.error ?? "Sync failed");
+      if (!data.runId) throw new Error(data.error ?? "Sync failed");
+      setSyncMessage(res.status === 409 ? "Attached to the active sync run." : "Sync queued.");
+      const finalRun = await pollRun<SyncRunState>(`/api/sync/status?id=${encodeURIComponent(data.runId)}`, (current) => {
+        setSyncMessage(current.status === "queued" ? "Sync queued." : "Syncing Google Sheet...");
+      });
       setSyncMessage(
-        `${data.insertedRows} new · ${data.updatedRows} updated · ${data.deactivatedRows} deactivated · ${data.failedRows} failed`,
+        `${finalRun.inserted_rows} new · ${finalRun.updated_rows} updated · ${finalRun.rows_skipped_unchanged} unchanged · ${finalRun.deactivated_rows} deactivated · ${finalRun.failed_rows} failed`,
       );
       onDone?.();
     } catch (error) {
@@ -82,22 +127,19 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
       body: JSON.stringify({ rangeKey }),
     });
     const startData = await startRes.json();
-    if (!startRes.ok) throw new Error(startData.error ?? "Failed to start refresh");
+    if (!startRes.ok && startRes.status !== 409) throw new Error(startData.error ?? "Failed to start refresh");
 
-    let currentRun: RefreshRunState = startData.run;
+    const runId = startData.run?.id ?? startData.runId;
+    if (!runId) throw new Error(startData.error ?? "Failed to start refresh");
+    let currentRun: RefreshRunState = startData.run ?? {
+      id: runId, status: "queued", total_urls: 0, processed_urls: 0, urls_with_data: 0, no_data_urls: 0, failed_urls: 0,
+    };
     setRun(currentRun);
-
-    while (currentRun.status === "running") {
-      const processRes = await fetch("/api/refresh/process", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ refreshRunId: currentRun.id, batchSize: 20 }),
-      });
-      const processData = await processRes.json();
-      if (!processRes.ok) throw new Error(processData.error ?? "Refresh batch failed");
-      currentRun = processData.run;
-      setRun(currentRun);
-    }
+    currentRun = await pollRun<RefreshRunState>(
+      `/api/refresh/status?id=${encodeURIComponent(runId)}`,
+      setRun,
+    );
+    setRun(currentRun);
   }
 
   function toggleRange(rangeKey: RangeKey, checked: boolean) {
@@ -161,7 +203,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
             Postgres.
           </p>
           <Button onClick={handleSync} disabled={syncing || refreshing}>
-            {syncing ? "Syncing…" : "Sync now"}
+            {syncing ? "Syncing..." : "Sync now"}
           </Button>
           {syncMessage && (
             <p className={`text-[13px] ${syncFailed ? "text-negative" : "text-ink-muted"}`}>{syncMessage}</p>
@@ -197,7 +239,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <Button onClick={handleRefresh} disabled={refreshing || syncing || selectedRanges.length === 0}>
               {refreshing
-                ? `Refreshing… (${rangeIndex + 1}/${selectedRanges.length})`
+                ? `Refreshing... (${rangeIndex + 1}/${selectedRanges.length})`
                 : `Refresh ${selectedRanges.length} range${selectedRanges.length === 1 ? "" : "s"}`}
             </Button>
             {selectedRanges.length === 0 && (

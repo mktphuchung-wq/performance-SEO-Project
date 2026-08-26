@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { getGoogleSheetId, getGoogleSheetTab } from "./env";
+import { withRetry } from "./concurrency";
 
 function authClient(accessToken: string) {
   const oauth2 = new google.auth.OAuth2();
@@ -7,7 +8,7 @@ function authClient(accessToken: string) {
   return oauth2;
 }
 
-export async function fetchContentUrlSheetRows(accessToken: string): Promise<string[][]> {
+export async function fetchContentUrlSheetRows(accessToken: string): Promise<unknown[][]> {
   const sheets = google.sheets({ version: "v4", auth: authClient(accessToken) });
   const spreadsheetId = getGoogleSheetId();
   const tab = getGoogleSheetTab();
@@ -19,7 +20,7 @@ export async function fetchContentUrlSheetRows(accessToken: string): Promise<str
     dateTimeRenderOption: "FORMATTED_STRING",
   });
 
-  return (result.data.values ?? []) as string[][];
+  return (result.data.values ?? []) as unknown[][];
 }
 
 export interface GscSite {
@@ -53,7 +54,7 @@ export interface SearchAnalyticsRow {
   position: number;
 }
 
-export type GoogleApiErrorType = "invalid_credentials" | "permission_denied" | "unknown";
+export type GoogleApiErrorType = "invalid_credentials" | "permission_denied" | "rate_limited" | "transient" | "unknown";
 
 export function classifyGoogleApiError(error: unknown): GoogleApiErrorType {
   const status = (error as { code?: number; status?: number })?.code ?? (error as { status?: number })?.status;
@@ -65,7 +66,49 @@ export function classifyGoogleApiError(error: unknown): GoogleApiErrorType {
   if (status === 403 || message.includes("permission") || message.includes("forbidden") || message.includes("scope")) {
     return "permission_denied";
   }
+  if (status === 429) return "rate_limited";
+  if (status !== undefined && status >= 500) return "transient";
   return "unknown";
+}
+
+export interface PageSearchAnalyticsRow extends SearchAnalyticsRow {
+  pageUrl: string;
+}
+
+export async function queryAllPagesSearchAnalytics(
+  accessToken: string,
+  siteUrl: string,
+  startDate: string,
+  endDate: string,
+  onAttempt?: () => void,
+): Promise<PageSearchAnalyticsRow[]> {
+  const webmasters = google.webmasters({ version: "v3", auth: authClient(accessToken) });
+  const rowLimit = 25000;
+  const rows: PageSearchAnalyticsRow[] = [];
+
+  for (let startRow = 0; ; startRow += rowLimit) {
+    const response = await withRetry(
+      () => webmasters.searchanalytics.query({
+        siteUrl,
+        requestBody: { startDate, endDate, dimensions: ["page"], rowLimit, startRow },
+      }),
+      { onAttempt },
+    );
+    const page = response.data.rows ?? [];
+    for (const row of page) {
+      const pageUrl = row.keys?.[0];
+      if (!pageUrl) continue;
+      rows.push({
+        pageUrl,
+        clicks: row.clicks ?? 0,
+        impressions: row.impressions ?? 0,
+        ctr: row.ctr ?? 0,
+        position: row.position ?? 0,
+      });
+    }
+    if (page.length < rowLimit) break;
+  }
+  return rows;
 }
 
 export async function queryUrlSearchAnalytics(

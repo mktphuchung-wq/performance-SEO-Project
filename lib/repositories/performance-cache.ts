@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, type DbExecutor } from "@/lib/db";
 import type { GrowthResult } from "@/lib/performance/growth";
 import type { RangeKey } from "@/lib/ranges";
 
@@ -68,6 +68,61 @@ export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput)
       input.errorMessage ?? null,
     ],
   );
+}
+
+export async function bulkUpsertPerformanceCache(inputs: UpsertPerformanceCacheInput[], db?: DbExecutor): Promise<void> {
+  if (inputs.length === 0) return;
+  const payload = inputs.map((input) => ({
+    content_url_id: input.contentUrlId,
+    range_key: input.rangeKey,
+    start_date: input.startDate,
+    end_date: input.endDate,
+    previous_start_date: input.previousStartDate,
+    previous_end_date: input.previousEndDate,
+    clicks: input.growth.clicks,
+    impressions: input.growth.impressions,
+    ctr: input.growth.ctr,
+    position: input.growth.position,
+    previous_clicks: input.growth.previousClicks,
+    previous_impressions: input.growth.previousImpressions,
+    previous_ctr: input.growth.previousCtr,
+    previous_position: input.growth.previousPosition,
+    click_delta: input.growth.clickDelta,
+    click_growth_pct: input.growth.clickGrowthPct,
+    impression_delta: input.growth.impressionDelta,
+    impression_growth_pct: input.growth.impressionGrowthPct,
+    growth_status: input.growth.growthStatus,
+    data_status: input.growth.dataStatus,
+    error_message: input.errorMessage ?? null,
+  }));
+  const sql = `insert into public.seo_performance_cache
+      (content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
+       clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
+       click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
+       error_message, refreshed_at, updated_at)
+    select x.content_url_id, x.range_key, x.start_date, x.end_date, x.previous_start_date, x.previous_end_date,
+           x.clicks, x.impressions, x.ctr, x.position, x.previous_clicks, x.previous_impressions,
+           x.previous_ctr, x.previous_position, x.click_delta, x.click_growth_pct, x.impression_delta,
+           x.impression_growth_pct, x.growth_status, x.data_status, x.error_message, now(), now()
+    from jsonb_to_recordset($1::jsonb) as x(
+      content_url_id uuid, range_key text, start_date date, end_date date, previous_start_date date,
+      previous_end_date date, clicks numeric, impressions numeric, ctr numeric, position numeric,
+      previous_clicks numeric, previous_impressions numeric, previous_ctr numeric, previous_position numeric,
+      click_delta numeric, click_growth_pct numeric, impression_delta numeric, impression_growth_pct numeric,
+      growth_status text, data_status text, error_message text
+    )
+    on conflict (content_url_id, range_key) do update set
+      start_date = excluded.start_date, end_date = excluded.end_date,
+      previous_start_date = excluded.previous_start_date, previous_end_date = excluded.previous_end_date,
+      clicks = excluded.clicks, impressions = excluded.impressions, ctr = excluded.ctr, position = excluded.position,
+      previous_clicks = excluded.previous_clicks, previous_impressions = excluded.previous_impressions,
+      previous_ctr = excluded.previous_ctr, previous_position = excluded.previous_position,
+      click_delta = excluded.click_delta, click_growth_pct = excluded.click_growth_pct,
+      impression_delta = excluded.impression_delta, impression_growth_pct = excluded.impression_growth_pct,
+      growth_status = excluded.growth_status, data_status = excluded.data_status,
+      error_message = excluded.error_message, refreshed_at = now(), updated_at = now()`;
+  if (db) await db.query(sql, [JSON.stringify(payload)]);
+  else await query(sql, [JSON.stringify(payload)]);
 }
 
 export interface UrlPerformanceRow {

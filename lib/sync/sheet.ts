@@ -1,135 +1,123 @@
 import { fetchContentUrlSheetRows } from "@/lib/google";
-import { computeUrlHash } from "@/lib/hash";
-import { deactivateMissingContentUrls, upsertContentUrl } from "@/lib/repositories/content-urls";
+import { withTransaction } from "@/lib/db";
+import { getSyncBulkChunkSize, getSyncDateFormatHint } from "@/lib/env";
+import { computeContentHash, computeUrlHash } from "@/lib/hash";
+import {
+  bulkUpsertContentUrls,
+  deactivateMissingContentUrls,
+  getContentHashMap,
+  type BulkUpsertContentUrlInput,
+} from "@/lib/repositories/content-urls";
 import { getMemberAliasMap } from "@/lib/repositories/member-aliases";
 import { getProjectGscPropertyMap } from "@/lib/repositories/project-gsc-properties";
-import { completeSyncRun, createSyncRun, failSyncRun } from "@/lib/repositories/sync-runs";
+import { claimSyncRun, completeSyncRun, failSyncRun, heartbeatSyncRun } from "@/lib/repositories/sync-runs";
+import { parseSheetDate } from "@/lib/sync/parse-date";
 
 const REQUIRED_HEADERS = ["project", "url", "member_name", "date", "type"];
 
-export interface SheetSyncResult {
-  syncRunId: string;
-  totalRows: number;
-  insertedRows: number;
-  updatedRows: number;
-  deactivatedRows: number;
-  failedRows: number;
-  warnings: string[];
+function normalizeHeader(header: unknown): string {
+  return String(header ?? "").trim().toLowerCase();
 }
 
-function normalizeHeader(header: string): string {
-  return header.trim().toLowerCase();
-}
-
-function validateHeaders(headerRow: string[]): { columnIndex: Record<string, number> } {
+function validateHeaders(headerRow: unknown[]): Record<string, number> {
   const normalized = headerRow.map(normalizeHeader);
-  const missing = REQUIRED_HEADERS.filter((h) => !normalized.includes(h));
-  if (missing.length > 0) {
-    throw new Error(`Sheet header missing required columns: ${missing.join(", ")}. Found: ${normalized.join(", ")}`);
+  const missing = REQUIRED_HEADERS.filter((header) => !normalized.includes(header));
+  if (missing.length > 0) throw new Error(`Sheet header missing required columns: ${missing.join(", ")}. Found: ${normalized.join(", ")}`);
+  for (const header of REQUIRED_HEADERS) {
+    if (normalized.filter((value) => value === header).length > 1) throw new Error(`Sheet header has duplicate column: ${header}`);
   }
-
-  const seen = new Set<string>();
-  for (const header of normalized) {
-    if (REQUIRED_HEADERS.includes(header)) {
-      if (seen.has(header)) {
-        throw new Error(`Sheet header has duplicate column: ${header}`);
-      }
-      seen.add(header);
-    }
-  }
-
-  const columnIndex: Record<string, number> = {};
-  REQUIRED_HEADERS.forEach((header) => {
-    columnIndex[header] = normalized.indexOf(header);
-  });
-  return { columnIndex };
+  return Object.fromEntries(REQUIRED_HEADERS.map((header) => [header, normalized.indexOf(header)]));
 }
 
-function parseWorkedAt(raw: unknown): string | null {
-  if (raw === null || raw === undefined || raw === "") return null;
-  const date = new Date(String(raw));
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString().slice(0, 10);
-}
-
-export async function syncContentUrlsFromSheet(accessToken: string, triggeredBy: string | null): Promise<SheetSyncResult> {
-  const syncRunId = await createSyncRun(triggeredBy);
+export async function runSyncJob(runId: string, accessToken: string): Promise<void> {
+  if (!(await claimSyncRun(runId))) return;
   const warnings: string[] = [];
-
   try {
+    const sheetStarted = Date.now();
     const rows = await fetchContentUrlSheetRows(accessToken);
-    if (rows.length === 0) {
-      throw new Error("Sheet returned no rows (expected a header row plus data).");
-    }
+    const sheetReadMs = Date.now() - sheetStarted;
+    if (rows.length < 2) throw new Error("Sheet returned no data rows; no URLs were changed.");
 
     const [headerRow, ...dataRows] = rows;
-    const { columnIndex } = validateHeaders(headerRow);
-
-    const memberAliasMap = await getMemberAliasMap();
-    const projectGscPropertyMap = await getProjectGscPropertyMap();
-
-    let insertedRows = 0;
-    let updatedRows = 0;
+    const columns = validateHeaders(headerRow);
+    const [memberAliasMap, projectGscPropertyMap] = await Promise.all([getMemberAliasMap(), getProjectGscPropertyMap()]);
+    const byHash = new Map<string, BulkUpsertContentUrlInput>();
     let failedRows = 0;
-    const seenHashes: string[] = [];
-    let sourceRowNumber = 1;
 
-    for (const row of dataRows) {
-      sourceRowNumber += 1;
-      const isBlank = row.every((cell) => String(cell ?? "").trim() === "");
-      if (isBlank) continue;
-
-      const project = String(row[columnIndex.project] ?? "").trim();
-      const url = String(row[columnIndex.url] ?? "").trim();
-      const memberName = String(row[columnIndex.member_name] ?? "").trim();
-      const workedAt = parseWorkedAt(row[columnIndex.date]);
-      const workType = String(row[columnIndex.type] ?? "").trim().toLowerCase();
-
+    for (let index = 0; index < dataRows.length; index += 1) {
+      const row = dataRows[index];
+      const sourceRowNumber = index + 2;
+      if (row.every((cell) => String(cell ?? "").trim() === "")) continue;
+      const project = String(row[columns.project] ?? "").trim();
+      const url = String(row[columns.url] ?? "").trim();
+      const memberName = String(row[columns.member_name] ?? "").trim();
+      const workType = String(row[columns.type] ?? "").trim().toLowerCase();
       if (!url) {
         warnings.push(`Row ${sourceRowNumber}: skipped, missing url`);
         failedRows += 1;
         continue;
       }
-
-      try {
-        const urlHash = computeUrlHash(url);
-        const memberEmail = memberAliasMap.get(memberName) ?? null;
-        const gscProperty = projectGscPropertyMap.get(project) ?? null;
-
-        const { inserted } = await upsertContentUrl({
-          urlHash,
-          project,
-          url,
-          memberName,
-          memberEmail,
-          workType,
-          gscProperty,
-          workedAt,
-          sourceRowNumber,
-        });
-
-        seenHashes.push(urlHash);
-        if (inserted) insertedRows += 1;
-        else updatedRows += 1;
-      } catch (rowError) {
+      const parsedDate = parseSheetDate(row[columns.date], getSyncDateFormatHint());
+      if (parsedDate.error) {
+        warnings.push(`Row ${sourceRowNumber}: ${parsedDate.error}`);
         failedRows += 1;
-        warnings.push(`Row ${sourceRowNumber}: ${(rowError as Error).message}`);
       }
+      const gscProperty = projectGscPropertyMap.get(project) ?? null;
+      const input: BulkUpsertContentUrlInput = {
+        urlHash: computeUrlHash(url),
+        project,
+        url,
+        memberName,
+        memberEmail: memberAliasMap.get(memberName) ?? null,
+        workType,
+        gscProperty,
+        workedAt: parsedDate.value,
+        sourceRowNumber,
+        contentHash: computeContentHash({ project, url, memberName, workedAt: parsedDate.value, workType, gscProperty }),
+      };
+      if (byHash.has(input.urlHash)) warnings.push(`Row ${sourceRowNumber}: duplicate normalized URL; last row wins`);
+      byHash.set(input.urlHash, input);
     }
+    if (byHash.size === 0) throw new Error("Sheet contained no valid URLs; no URLs were changed.");
 
-    const deactivatedRows = await deactivateMissingContentUrls(seenHashes);
-
-    await completeSyncRun(syncRunId, {
-      totalRows: dataRows.length,
-      insertedRows,
-      updatedRows,
-      deactivatedRows,
-      failedRows,
+    await heartbeatSyncRun(runId);
+    const dbStarted = Date.now();
+    const result = await withTransaction(async (client) => {
+      const existing = await getContentHashMap(client);
+      const changed: BulkUpsertContentUrlInput[] = [];
+      let insertedRows = 0;
+      let updatedRows = 0;
+      let rowsSkippedUnchanged = 0;
+      for (const input of byHash.values()) {
+        const current = existing.get(input.urlHash);
+        if (!current) {
+          insertedRows += 1;
+          changed.push(input);
+        } else if (!current.isActive || current.contentHash !== input.contentHash) {
+          updatedRows += 1;
+          changed.push(input);
+        } else {
+          rowsSkippedUnchanged += 1;
+        }
+      }
+      const chunkSize = getSyncBulkChunkSize();
+      for (let offset = 0; offset < changed.length; offset += chunkSize) {
+        await bulkUpsertContentUrls(changed.slice(offset, offset + chunkSize), client);
+      }
+      const deactivatedRows = await deactivateMissingContentUrls([...byHash.keys()], client);
+      return { insertedRows, updatedRows, rowsSkippedUnchanged, deactivatedRows };
     });
-
-    return { syncRunId, totalRows: dataRows.length, insertedRows, updatedRows, deactivatedRows, failedRows, warnings };
+    const dbWriteMs = Date.now() - dbStarted;
+    await completeSyncRun(runId, {
+      totalRows: dataRows.length,
+      failedRows,
+      sheetReadMs,
+      dbWriteMs,
+      ...result,
+    });
+    if (warnings.length > 0) console.warn(`Sync ${runId} completed with warnings`, warnings);
   } catch (error) {
-    await failSyncRun(syncRunId, (error as Error).message);
+    await failSyncRun(runId, (error as Error).message);
     throw error;
   }
 }
