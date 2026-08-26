@@ -97,6 +97,11 @@ export default function AdminOverviewPage() {
       .catch((requestError: Error) => {
         if (!controller.signal.aborted && requestError.name !== "AbortError") {
           console.error("Failed to load admin overview", { range, error: requestError });
+          // Drop the previous range's rows: the header and every StatCard are
+          // already labelled with the new range, so keeping them would present
+          // stale numbers as if they belonged to the range that failed to load.
+          setMembers([]);
+          setProjects([]);
           setError(requestError.message);
         }
       });

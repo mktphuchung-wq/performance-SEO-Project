@@ -27,7 +27,8 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [refreshing, setRefreshing] = useState(false);
   const [run, setRun] = useState<RefreshRunState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [doneRanges, setDoneRanges] = useState(0);
+  /** Position of the range being refreshed, so the button counter is accurate even when a range fails. */
+  const [rangeIndex, setRangeIndex] = useState(0);
 
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
@@ -72,6 +73,9 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   }
 
   async function refreshRange(rangeKey: string) {
+    // Clear the previous range's counters before awaiting /start, otherwise the
+    // finished range's 100% totals render under the next range's label.
+    setRun(null);
     const startRes = await fetch("/api/refresh/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -113,16 +117,29 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     setRefreshing(true);
     setRefreshError(null);
     setRun(null);
-    setDoneRanges(0);
+    setRangeIndex(0);
+    // A failing range must not discard the ranges that already committed data,
+    // so each one is attempted independently and errors are collected.
+    const failures: string[] = [];
+    let completed = 0;
     try {
-      for (const target of selectedRanges) {
+      for (const [index, target] of selectedRanges.entries()) {
         setActiveRange(target);
-        await refreshRange(target);
-        setDoneRanges((count) => count + 1);
+        setRangeIndex(index);
+        try {
+          await refreshRange(target);
+          completed += 1;
+        } catch (error) {
+          failures.push(`${RANGE_LABELS[target] ?? target}: ${(error as Error).message}`);
+        }
       }
-      onDone?.();
-    } catch (error) {
-      setRefreshError((error as Error).message);
+      if (failures.length > 0) {
+        const prefix = completed > 0 ? `${completed} of ${selectedRanges.length} ranges refreshed — ` : "";
+        setRefreshError(prefix + failures.join(" · "));
+      }
+      // Refetch whenever any range landed, otherwise the overview keeps showing
+      // pre-refresh numbers even though Postgres already has the new rows.
+      if (completed > 0) onDone?.();
     } finally {
       setActiveRange(null);
       setRefreshing(false);
@@ -180,7 +197,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <Button onClick={handleRefresh} disabled={refreshing || syncing || selectedRanges.length === 0}>
               {refreshing
-                ? `Refreshing… (${doneRanges + 1}/${selectedRanges.length})`
+                ? `Refreshing… (${rangeIndex + 1}/${selectedRanges.length})`
                 : `Refresh ${selectedRanges.length} range${selectedRanges.length === 1 ? "" : "s"}`}
             </Button>
             {selectedRanges.length === 0 && (
