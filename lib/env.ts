@@ -44,6 +44,26 @@ export function getSyncGscConcurrency(): number {
   return positiveInteger("SYNC_GSC_CONCURRENCY", 4, 16);
 }
 
+export function getSyncGscRequestTimeoutMs(): number {
+  return positiveInteger("SYNC_GSC_REQUEST_TIMEOUT_MS", 30_000, 120_000);
+}
+
+export function getSyncGscRetryAttempts(): number {
+  return positiveInteger("SYNC_GSC_RETRY_ATTEMPTS", 5, 10);
+}
+
+export function getSyncGscMaxRequestsPerRun(): number {
+  return positiveInteger("SYNC_GSC_MAX_REQUESTS_PER_RUN", 20_000, 100_000);
+}
+
+export function getSyncRefreshItemLeaseSeconds(): number {
+  return positiveInteger("SYNC_REFRESH_ITEM_LEASE_SECONDS", 90, 600);
+}
+
+export function getSyncGscExactChunkSize(): number {
+  return positiveInteger("SYNC_GSC_EXACT_CHUNK_SIZE", 50, 500);
+}
+
 export function isSyncGscWideQueryEnabled(): boolean {
   return process.env.SYNC_GSC_WIDE_QUERY?.toLowerCase() !== "false";
 }

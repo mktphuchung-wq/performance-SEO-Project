@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "verify:refresh": "node scripts/verify-refresh-range.mjs",
+    "verify:refresh-db": "node scripts/verify-refresh-db.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

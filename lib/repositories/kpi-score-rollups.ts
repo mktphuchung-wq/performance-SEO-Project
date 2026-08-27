@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, type DbExecutor } from "@/lib/db";
 import type { ScoreAggregate } from "@/lib/performance/score";
 import type { RangeKey } from "@/lib/ranges";
 
@@ -39,27 +39,29 @@ function scoreValues(input: UpsertScoreRollupInput): unknown[] {
   ];
 }
 
-export async function upsertMemberScore(memberEmail: string | null, input: UpsertScoreRollupInput): Promise<void> {
-  await query(
+export async function upsertMemberScore(memberEmail: string | null, input: UpsertScoreRollupInput, db?: DbExecutor): Promise<void> {
+  const sql =
     `insert into public.member_performance_score
        (member_name, member_email, ${SCORE_COLUMNS}, refreshed_at, updated_at)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), now())
      on conflict (member_name, range_key) do update set
        member_email = excluded.member_email,
-       ${SCORE_UPDATE_SET}`,
-    [input.key, memberEmail, ...scoreValues(input)],
-  );
+       ${SCORE_UPDATE_SET}`;
+  const params = [input.key, memberEmail, ...scoreValues(input)];
+  if (db) await db.query(sql, params);
+  else await query(sql, params);
 }
 
-export async function upsertProjectScore(input: UpsertScoreRollupInput): Promise<void> {
-  await query(
+export async function upsertProjectScore(input: UpsertScoreRollupInput, db?: DbExecutor): Promise<void> {
+  const sql =
     `insert into public.project_performance_score
        (project, ${SCORE_COLUMNS}, refreshed_at, updated_at)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), now())
-     on conflict (project, range_key) do update set
-       ${SCORE_UPDATE_SET}`,
-    [input.key, ...scoreValues(input)],
-  );
+      on conflict (project, range_key) do update set
+        ${SCORE_UPDATE_SET}`;
+  const params = [input.key, ...scoreValues(input)];
+  if (db) await db.query(sql, params);
+  else await query(sql, params);
 }
 
 /** Shape shared by both score rollup rows as they come back from Postgres. */

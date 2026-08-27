@@ -16,6 +16,8 @@ interface RunsResponse {
 
 const statusTone: Record<string, BadgeTone> = {
   success: "positive",
+  partial: "warning",
+  cancelled: "neutral",
   failed: "negative",
   running: "accent",
   queued: "neutral",
@@ -149,6 +151,9 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
                     GSC {run.gsc_query_ms ?? 0}ms / {run.gsc_call_count} calls · DB {run.db_write_ms ?? 0}ms
                   </div>
                 )}
+                <div className="numeric mt-1 text-xs text-ink-subtle">
+                  {run.phase.replaceAll("_", " ")} · {run.completed_items}/{run.total_items} items · {run.retry_count} retries
+                </div>
                 <div className="numeric mt-1 text-[13px] text-ink-muted">
                   {run.processed_urls}/{run.total_urls} processed · {run.urls_with_data} with data ·{" "}
                   {run.no_data_urls} no data ·{" "}

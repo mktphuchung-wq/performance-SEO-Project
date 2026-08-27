@@ -60,4 +60,21 @@ const retried = await concurrency.withRetry(async () => {
 assert.equal(retried, "ok");
 assert.equal(attempts, 3);
 
+// A limiter is global to every caller sharing it. Nested property/URL schedulers
+// must not multiply the configured concurrency.
+active = 0;
+peak = 0;
+const limiter = concurrency.createLimiter(2);
+await Promise.all([...Array(12).keys()].map((value) => limiter.run(async () => {
+  active += 1;
+  peak = Math.max(peak, active);
+  await new Promise((resolve) => setTimeout(resolve, (value % 3) + 1));
+  active -= 1;
+})));
+assert.equal(peak, 2);
+
+assert.equal(concurrency.isRetryableHttpError(Object.assign(new Error("reset"), { code: "ECONNRESET" })), true);
+assert.equal(concurrency.isRetryableHttpError({ response: { status: 503 } }), true);
+assert.equal(concurrency.isRetryableHttpError({ response: { status: 403 } }), false);
+
 console.log("Sync v2 verification passed.");

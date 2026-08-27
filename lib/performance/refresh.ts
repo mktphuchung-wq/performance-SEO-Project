@@ -1,41 +1,52 @@
-import { mapWithConcurrency, withRetry } from "@/lib/concurrency";
-import { withTransaction } from "@/lib/db";
-import { getSyncGscConcurrency, isSyncGscWideQueryEnabled } from "@/lib/env";
+import { createLimiter, withRetry } from "@/lib/concurrency";
+import { withTransaction, type DbExecutor } from "@/lib/db";
 import {
-  classifyGoogleApiError,
+  getSyncGscConcurrency,
+  getSyncGscExactChunkSize,
+  getSyncGscMaxRequestsPerRun,
+  getSyncGscRequestTimeoutMs,
+  getSyncGscRetryAttempts,
+  isSyncGscWideQueryEnabled,
+} from "@/lib/env";
+import {
   queryAllPagesSearchAnalytics,
   queryUrlSearchAnalytics,
   type SearchAnalyticsRow,
 } from "@/lib/google";
+import { classifyGoogleApiError, isWideQueryUnsupported } from "@/lib/google-errors";
 import { computeGrowth, type PeriodMetrics } from "@/lib/performance/growth";
 import { aggregateScore, computeUrlScore } from "@/lib/performance/score";
-import { listActiveContentUrls, listActiveContentUrlsByIds, type ContentUrl } from "@/lib/repositories/content-urls";
-import { bulkUpsertPerformanceCache, getPerformanceRowsForRange, type UpsertPerformanceCacheInput } from "@/lib/repositories/performance-cache";
-import {
-  advanceRefreshRun,
-  claimRefreshRun,
-  createRefreshRun,
-  finishRefreshRun,
-  getRefreshRun,
-  heartbeatRefreshRun,
-  recordRefreshTimings,
-  type RefreshRun,
-} from "@/lib/repositories/refresh-runs";
+import { listActiveContentUrls, listContentUrlsByIds, type ContentUrl } from "@/lib/repositories/content-urls";
 import { getKpiSettings } from "@/lib/repositories/kpi-settings";
 import { upsertMemberScore, upsertProjectScore } from "@/lib/repositories/kpi-score-rollups";
-import { getScoringInputRowsForRange, upsertUrlPerformanceScore } from "@/lib/repositories/url-performance-score";
+import {
+  bulkStagePerformanceCache,
+  getPerformanceRowsForRange,
+  getStagedPerformanceCount,
+  publishStagedPerformanceCache,
+  type UpsertPerformanceCacheInput,
+} from "@/lib/repositories/performance-cache";
+import {
+  claimNextRefreshItem,
+  completeRefreshItem,
+  createRefreshRun,
+  deferRefreshItem,
+  finishRefreshRun,
+  getRefreshRun,
+  heartbeatRefreshWork,
+  setRefreshPhase,
+  splitRefreshItemForExactFallback,
+  type RefreshRun,
+  type RefreshRunItem,
+} from "@/lib/repositories/refresh-runs";
 import { upsertMemberRollup, upsertProjectRollup } from "@/lib/repositories/rollups";
+import { bulkUpsertUrlPerformanceScores, getScoringInputRowsForRange } from "@/lib/repositories/url-performance-score";
 import { computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
 import { normalizeForGscMatch } from "@/lib/sync/normalize-url";
 
-export async function startRefresh(
-  triggeredBy: string | null,
-  rangeKey: RangeKey,
-  custom?: { startDate: string; endDate: string },
-): Promise<RefreshRun> {
-  const range = computeRangeDates(rangeKey, custom);
-  const urls = await listActiveContentUrls();
-  return createRefreshRun(triggeredBy, range, urls.map((url) => url.id));
+export async function startRefresh(triggeredBy: string | null, rangeKey: RangeKey): Promise<RefreshRun> {
+  const range = computeRangeDates(rangeKey);
+  return createRefreshRun(triggeredBy, range, await listActiveContentUrls());
 }
 
 function isEligible(contentUrl: ContentUrl, endDate: string): boolean {
@@ -61,182 +72,276 @@ function cacheInput(run: RefreshRun, contentUrl: ContentUrl, growth: ReturnType<
   };
 }
 
-async function fetchExactMetrics(
+function errorInputs(run: RefreshRun, urls: ContentUrl[], message: string): UpsertPerformanceCacheInput[] {
+  return urls.map((url) => cacheInput(run, url, { ...computeGrowth(null, null, true), dataStatus: "error" }, message));
+}
+
+function countOutcomes(inputs: UpsertPerformanceCacheInput[]) {
+  return inputs.reduce((counts, input) => {
+    if (input.growth.dataStatus === "ok") counts.withData += 1;
+    else if (input.growth.dataStatus === "error") counts.failed += 1;
+    else counts.noData += 1;
+    return counts;
+  }, { withData: 0, noData: 0, failed: 0 });
+}
+
+function startHeartbeat(runId: string, itemId: string, leaseOwner: string): () => void {
+  const timer = setInterval(() => {
+    void heartbeatRefreshWork(runId, itemId, leaseOwner).catch((error) => {
+      console.error(`Could not heartbeat refresh item ${itemId}`, error);
+    });
+  }, 10_000);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+interface CallCounters {
+  apiCalls: number;
+  retries: number;
+}
+
+function countAttempt(counters: CallCounters, run: RefreshRun): void {
+  counters.apiCalls += 1;
+  if (run.gsc_call_count + counters.apiCalls > getSyncGscMaxRequestsPerRun()) {
+    throw new Error(`Search Console request budget exceeded (${getSyncGscMaxRequestsPerRun()} calls)`);
+  }
+}
+
+async function fetchWidePeriod(
   accessToken: string,
+  run: RefreshRun,
+  property: string,
+  startDate: string,
+  endDate: string,
+  counters: CallCounters,
+): Promise<Map<string, PeriodMetrics>> {
+  const rows = await queryAllPagesSearchAnalytics(
+    accessToken,
+    property,
+    startDate,
+    endDate,
+    () => countAttempt(counters, run),
+    () => { counters.retries += 1; },
+    getSyncGscRequestTimeoutMs(),
+  );
+  return new Map(rows.map((row) => [normalizeForGscMatch(row.pageUrl), row]));
+}
+
+async function fetchExactPeriod(
+  accessToken: string,
+  run: RefreshRun,
   property: string,
   url: string,
   startDate: string,
   endDate: string,
-  countCall: () => void,
+  counters: CallCounters,
+  limiter: ReturnType<typeof createLimiter>,
 ): Promise<SearchAnalyticsRow | null> {
-  return withRetry(() => queryUrlSearchAnalytics(accessToken, property, url, startDate, endDate), { onAttempt: countCall });
+  return limiter.run(() => withRetry(
+    () => queryUrlSearchAnalytics(accessToken, property, url, startDate, endDate, getSyncGscRequestTimeoutMs()),
+    {
+      attempts: getSyncGscRetryAttempts(),
+      baseDelayMs: 1_000,
+      maxDelayMs: 30_000,
+      onAttempt: () => countAttempt(counters, run),
+      onRetry: () => { counters.retries += 1; },
+    },
+  ));
 }
 
-async function propertyInputs(
+async function processInternalItem(run: RefreshRun, urls: ContentUrl[]): Promise<UpsertPerformanceCacheInput[]> {
+  return urls.map((url) => {
+    if (!isEligible(url, run.end_date)) return cacheInput(run, url, computeGrowth(null, null, false));
+    return cacheInput(
+      run,
+      url,
+      { ...computeGrowth(null, null, true), dataStatus: "error" },
+      `No Search Console property mapped for project "${url.project}". Set it in Admin -> Settings.`,
+    );
+  });
+}
+
+async function processWideItem(
   accessToken: string,
   run: RefreshRun,
-  property: string,
+  item: RefreshRunItem,
   urls: ContentUrl[],
-  countCall: () => void,
+  counters: CallCounters,
 ): Promise<UpsertPerformanceCacheInput[]> {
-  if (!isSyncGscWideQueryEnabled()) {
-    return mapWithConcurrency(urls, getSyncGscConcurrency(), async (contentUrl) => {
-      try {
-        const current = await fetchExactMetrics(accessToken, property, contentUrl.url, run.start_date, run.end_date, countCall);
-        const previous = run.previous_start_date && run.previous_end_date
-          ? await fetchExactMetrics(accessToken, property, contentUrl.url, run.previous_start_date, run.previous_end_date, countCall)
-          : null;
-        return cacheInput(run, contentUrl, computeGrowth(current, previous, true));
-      } catch (error) {
-        const kind = classifyGoogleApiError(error);
-        if (kind === "invalid_credentials" || kind === "rate_limited" || kind === "transient") throw error;
-        return cacheInput(run, contentUrl, { ...computeGrowth(null, null, true), dataStatus: "error" }, apiError(error, property));
-      }
-    });
+  const property = item.gsc_property;
+  if (!property) throw new Error("Wide refresh item has no Search Console property");
+  const eligible = urls.filter((url) => isEligible(url, run.end_date));
+  const inputs = urls.filter((url) => !isEligible(url, run.end_date)).map((url) => cacheInput(run, url, computeGrowth(null, null, false)));
+  const current = await fetchWidePeriod(accessToken, run, property, run.start_date, run.end_date, counters);
+  if (run.previous_start_date && run.previous_end_date) await setRefreshPhase(run.id, "fetching_previous");
+  const previous = run.previous_start_date && run.previous_end_date
+    ? await fetchWidePeriod(accessToken, run, property, run.previous_start_date, run.previous_end_date, counters)
+    : new Map<string, PeriodMetrics>();
+  for (const url of eligible) {
+    const key = normalizeForGscMatch(url.url);
+    inputs.push(cacheInput(run, url, computeGrowth(current.get(key) ?? null, previous.get(key) ?? null, true)));
   }
-
-  try {
-    const currentRows = await queryAllPagesSearchAnalytics(accessToken, property, run.start_date, run.end_date, countCall);
-    const previousRows = run.previous_start_date && run.previous_end_date
-      ? await queryAllPagesSearchAnalytics(accessToken, property, run.previous_start_date, run.previous_end_date, countCall)
-      : [];
-    const current = new Map<string, PeriodMetrics>();
-    const previous = new Map<string, PeriodMetrics>();
-    for (const row of currentRows) current.set(normalizeForGscMatch(row.pageUrl), row);
-    for (const row of previousRows) previous.set(normalizeForGscMatch(row.pageUrl), row);
-    return urls.map((contentUrl) => {
-      const key = normalizeForGscMatch(contentUrl.url);
-      return cacheInput(run, contentUrl, computeGrowth(current.get(key) ?? null, previous.get(key) ?? null, true));
-    });
-  } catch (error) {
-    const kind = classifyGoogleApiError(error);
-    if (kind === "invalid_credentials" || kind === "rate_limited" || kind === "transient") throw error;
-    if (kind === "permission_denied") {
-      const message = apiError(error, property);
-      return urls.map((contentUrl) => cacheInput(
-        run,
-        contentUrl,
-        { ...computeGrowth(null, null, true), dataStatus: "error" },
-        message,
-      ));
-    }
-
-    // Some very large properties reject an unfiltered query. Preserve correctness
-    // by falling back to bounded exact-page requests for only the tracked URLs.
-    return mapWithConcurrency(urls, getSyncGscConcurrency(), async (contentUrl) => {
-      try {
-        const current = await fetchExactMetrics(accessToken, property, contentUrl.url, run.start_date, run.end_date, countCall);
-        const previous = run.previous_start_date && run.previous_end_date
-          ? await fetchExactMetrics(accessToken, property, contentUrl.url, run.previous_start_date, run.previous_end_date, countCall)
-          : null;
-        return cacheInput(run, contentUrl, computeGrowth(current, previous, true));
-      } catch (fallbackError) {
-        const fallbackKind = classifyGoogleApiError(fallbackError);
-        if (fallbackKind === "invalid_credentials" || fallbackKind === "rate_limited" || fallbackKind === "transient") {
-          throw fallbackError;
-        }
-        return cacheInput(run, contentUrl, { ...computeGrowth(null, null, true), dataStatus: "error" }, apiError(fallbackError, property));
-      }
-    });
-  }
+  return inputs;
 }
 
-async function processRunUrls(accessToken: string, run: RefreshRun, batchIds: string[]): Promise<RefreshRun> {
-  const contentUrls = await listActiveContentUrlsByIds(batchIds);
-  const activeIds = new Set(contentUrls.map((url) => url.id));
-  const inputs: UpsertPerformanceCacheInput[] = [];
-  const byProperty = new Map<string, ContentUrl[]>();
-
-  for (const contentUrl of contentUrls) {
-    if (!isEligible(contentUrl, run.end_date)) {
-      inputs.push(cacheInput(run, contentUrl, computeGrowth(null, null, false)));
-    } else if (!contentUrl.gsc_property) {
-      inputs.push(cacheInput(
-        run,
-        contentUrl,
-        { ...computeGrowth(null, null, true), dataStatus: "error" },
-        `No Search Console property mapped for project "${contentUrl.project}". Set it in Admin -> Settings.`,
-      ));
-    } else {
-      const grouped = byProperty.get(contentUrl.gsc_property) ?? [];
-      grouped.push(contentUrl);
-      byProperty.set(contentUrl.gsc_property, grouped);
+async function processExactItem(
+  accessToken: string,
+  run: RefreshRun,
+  item: RefreshRunItem,
+  urls: ContentUrl[],
+  counters: CallCounters,
+): Promise<UpsertPerformanceCacheInput[]> {
+  const property = item.gsc_property;
+  if (!property) throw new Error("Exact refresh item has no Search Console property");
+  const limiter = createLimiter(getSyncGscConcurrency());
+  return Promise.all(urls.map(async (url) => {
+    if (!isEligible(url, run.end_date)) return cacheInput(run, url, computeGrowth(null, null, false));
+    try {
+      const current = await fetchExactPeriod(accessToken, run, property, url.url, run.start_date, run.end_date, counters, limiter);
+      const previous = run.previous_start_date && run.previous_end_date
+        ? await fetchExactPeriod(accessToken, run, property, url.url, run.previous_start_date, run.previous_end_date, counters, limiter)
+        : null;
+      return cacheInput(run, url, computeGrowth(current, previous, true));
+    } catch (error) {
+      if (classifyGoogleApiError(error) === "invalid_credentials") throw error;
+      return errorInputs(run, [url], apiError(error, property))[0];
     }
+  }));
+}
+
+function exactChunks(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  const size = getSyncGscExactChunkSize();
+  for (let offset = 0; offset < ids.length; offset += size) chunks.push(ids.slice(offset, offset + size));
+  return chunks;
+}
+
+export interface RefreshProcessResult {
+  run: RefreshRun;
+  done: boolean;
+  processedItem: boolean;
+}
+
+export async function processNextRefreshItem(accessToken: string, refreshRunId: string): Promise<RefreshProcessResult> {
+  const claimed = await claimNextRefreshItem(refreshRunId);
+  if (!claimed) {
+    const current = await getRefreshRun(refreshRunId);
+    if (!current) throw new Error("refresh_run not found");
+    if (current.status === "queued" && current.total_items === 0) {
+      await finishRefreshRun(current.id, "success");
+      const empty = (await getRefreshRun(refreshRunId)) ?? current;
+      return { run: empty, done: true, processedItem: false };
+    }
+    if (current.status === "running" && current.completed_items >= current.total_items) await publishRefreshRun(current);
+    const run = (await getRefreshRun(refreshRunId)) ?? current;
+    return { run, done: !["queued", "running"].includes(run.status), processedItem: false };
   }
 
-  let gscCallCount = 0;
+  const { run, item, leaseOwner } = claimed;
+  const stopHeartbeat = startHeartbeat(run.id, item.id, leaseOwner);
+  const counters: CallCounters = { apiCalls: 0, retries: 0 };
   const gscStarted = Date.now();
-  const propertyResults = await mapWithConcurrency(
-    [...byProperty.entries()],
-    getSyncGscConcurrency(),
-    ([property, urls]) => propertyInputs(accessToken, run, property, urls, () => { gscCallCount += 1; }),
-  );
-  inputs.push(...propertyResults.flat());
-  const gscQueryMs = Date.now() - gscStarted;
-
-  let withData = 0;
-  let noData = batchIds.length - activeIds.size;
-  let failed = 0;
-  for (const input of inputs) {
-    if (input.growth.dataStatus === "ok") withData += 1;
-    else if (input.growth.dataStatus === "error") failed += 1;
-    else noData += 1;
-  }
-
-  await heartbeatRefreshRun(run.id);
-  const dbStarted = Date.now();
-  const updated = await withTransaction(async (client) => {
-    await bulkUpsertPerformanceCache(inputs, client);
-    return advanceRefreshRun(run.id, batchIds, { withData, noData, failed }, client);
-  });
-  const dbWriteMs = Date.now() - dbStarted;
-  await recordRefreshTimings(run.id, { gscQueryMs, dbWriteMs, gscCallCount });
-  return updated;
-}
-
-export async function processRefreshBatch(accessToken: string, refreshRunId: string, batchSize = 20): Promise<RefreshRun> {
-  let run = await getRefreshRun(refreshRunId);
-  if (!run) throw new Error("refresh_run not found");
-  if (run.status === "queued") {
-    if (!(await claimRefreshRun(refreshRunId))) return (await getRefreshRun(refreshRunId)) ?? run;
-    run = (await getRefreshRun(refreshRunId)) ?? run;
-  }
-  if (run.status !== "running") return run;
-  const safeBatchSize = Math.max(1, Math.min(Math.floor(batchSize), 1000));
-  const batchIds = run.pending_content_url_ids.slice(0, safeBatchSize);
-  if (batchIds.length > 0) run = await processRunUrls(accessToken, run, batchIds);
-  await maybeFinishRun(run);
-  return (await getRefreshRun(refreshRunId)) ?? run;
-}
-
-export async function drainRefreshRun(accessToken: string, refreshRunId: string): Promise<void> {
   try {
-    let run = await getRefreshRun(refreshRunId);
-    if (!run) throw new Error("refresh_run not found");
-    if (run.status === "queued") {
-      if (!(await claimRefreshRun(refreshRunId))) return;
-      run = (await getRefreshRun(refreshRunId)) ?? run;
+    const urls = await listContentUrlsByIds(item.content_url_ids);
+    const foundIds = new Set(urls.map((url) => url.id));
+    const missingIds = item.content_url_ids.filter((id) => !foundIds.has(id));
+    if (missingIds.length > 0) throw new Error(`Refresh snapshot lost ${missingIds.length} content URL(s)`);
+    let inputs: UpsertPerformanceCacheInput[];
+    try {
+      if (item.item_type === "internal") inputs = await processInternalItem(run, urls);
+      else if (item.item_type === "property_exact" || !isSyncGscWideQueryEnabled()) {
+        if (run.previous_start_date && run.previous_end_date) await setRefreshPhase(run.id, "fetching_previous");
+        inputs = await processExactItem(accessToken, run, item, urls, counters);
+      } else {
+        inputs = await processWideItem(accessToken, run, item, urls, counters);
+      }
+    } catch (error) {
+      if (item.item_type === "property_wide" && isWideQueryUnsupported(error)) {
+        await splitRefreshItemForExactFallback(run.id, item.id, leaseOwner, exactChunks(item.content_url_ids), {
+          apiCalls: counters.apiCalls,
+          retries: counters.retries,
+          gscQueryMs: Date.now() - gscStarted,
+          errorType: classifyGoogleApiError(error),
+          errorMessage: apiError(error, item.gsc_property ?? "unknown"),
+        });
+        const updated = (await getRefreshRun(run.id)) ?? run;
+        return { run: updated, done: false, processedItem: true };
+      }
+      const kind = classifyGoogleApiError(error);
+      if (kind === "invalid_credentials") throw error;
+      if ((kind === "rate_limited" || kind === "transient") && item.attempt_count < 3) {
+        await deferRefreshItem(run.id, item.id, leaseOwner, {
+          apiCalls: counters.apiCalls,
+          retries: counters.retries,
+          gscQueryMs: Date.now() - gscStarted,
+          errorType: kind,
+          errorMessage: apiError(error, item.gsc_property ?? "unknown"),
+          delaySeconds: 2 ** item.attempt_count * 5,
+        });
+        const deferred = (await getRefreshRun(run.id)) ?? run;
+        return { run: deferred, done: false, processedItem: true };
+      }
+      inputs = errorInputs(run, urls, apiError(error, item.gsc_property ?? "unknown"));
     }
-    while (run.status === "running" && run.pending_content_url_ids.length > 0) {
-      run = await processRunUrls(accessToken, run, run.pending_content_url_ids);
+
+    const outcomes = countOutcomes(inputs);
+    const dbStarted = Date.now();
+    await withTransaction(async (client) => {
+      await bulkStagePerformanceCache(run.id, inputs, client);
+      await completeRefreshItem(run.id, item.id, leaseOwner, {
+        contentUrlIds: item.content_url_ids,
+        processed: item.content_url_ids.length,
+        withData: outcomes.withData,
+        noData: outcomes.noData,
+        failed: outcomes.failed,
+        apiCalls: counters.apiCalls,
+        retries: counters.retries,
+        gscQueryMs: Date.now() - gscStarted,
+        dbWriteMs: Date.now() - dbStarted,
+        errorType: outcomes.failed > 0 ? "url_errors" : undefined,
+        errorMessage: outcomes.failed > 0 ? `${outcomes.failed} URL(s) could not be measured` : undefined,
+      }, client);
+    });
+    let updated = (await getRefreshRun(run.id)) ?? run;
+    if (updated.completed_items >= updated.total_items) {
+      await publishRefreshRun(updated);
+      updated = (await getRefreshRun(run.id)) ?? updated;
     }
-    await maybeFinishRun(run);
+    return { run: updated, done: !["queued", "running"].includes(updated.status), processedItem: true };
   } catch (error) {
-    await finishRefreshRun(refreshRunId, "failed", (error as Error).message);
+    await finishRefreshRun(run.id, "failed", (error as Error).message).catch(() => undefined);
     throw error;
+  } finally {
+    stopHeartbeat();
   }
 }
 
-async function maybeFinishRun(run: RefreshRun): Promise<void> {
-  if (run.status !== "running" || run.pending_content_url_ids.length > 0) return;
-  const rangeKey = run.range_key as RangeKey;
-  await computeAndStoreRollups(rangeKey, run.start_date, run.end_date);
-  if (isRollingRange(rangeKey)) await computeAndStoreScores(rangeKey, run.start_date, run.end_date);
-  await finishRefreshRun(run.id, "success");
+async function publishRefreshRun(run: RefreshRun): Promise<void> {
+  await withTransaction(async (client) => {
+    const lockedResult = await client.query<RefreshRun>("select * from public.refresh_runs where id = $1 for update", [run.id]);
+    const locked = lockedResult.rows[0];
+    if (!locked || locked.status !== "running" || locked.completed_items < locked.total_items) return;
+    const staged = await getStagedPerformanceCount(run.id, client);
+    if (staged !== locked.total_urls) throw new Error(`Refresh snapshot incomplete: staged ${staged} of ${locked.total_urls} URLs`);
+    await setRefreshPhase(run.id, "publishing", client);
+    await publishStagedPerformanceCache(run.id, client);
+    await setRefreshPhase(run.id, "rollup", client);
+    await computeAndStoreRollups(locked.range_key as RangeKey, locked.start_date, locked.end_date, client);
+    if (isRollingRange(locked.range_key as RangeKey)) {
+      await setRefreshPhase(run.id, "scoring", client);
+      await computeAndStoreScores(locked.range_key as RangeKey, locked.start_date, locked.end_date, client);
+    }
+    await finishRefreshRun(
+      run.id,
+      locked.failed_urls > 0 ? "partial" : "success",
+      locked.failed_urls > 0 ? `${locked.failed_urls} URL(s) were published with errors` : undefined,
+      client,
+    );
+  });
 }
 
-export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: string, endDate: string): Promise<void> {
-  const rows = await getPerformanceRowsForRange(rangeKey);
+export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: string, endDate: string, db?: DbExecutor): Promise<void> {
+  const rows = await getPerformanceRowsForRange(rangeKey, db);
   const byMember = new Map<string, typeof rows>();
   const byProject = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -248,17 +353,20 @@ export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: stri
     byProject.get(projectKey)!.push(row);
   }
   for (const [memberName, memberRows] of byMember) {
-    const email = memberRows.find((row) => row.member_email)?.member_email ?? null;
-    await upsertMemberRollup(email, { key: memberName, rangeKey, startDate, endDate, ...summarize(memberRows) });
+    await upsertMemberRollup(
+      memberRows.find((row) => row.member_email)?.member_email ?? null,
+      { key: memberName, rangeKey, startDate, endDate, ...summarize(memberRows) },
+      db,
+    );
   }
   for (const [project, projectRows] of byProject) {
-    await upsertProjectRollup({ key: project, rangeKey, startDate, endDate, ...summarize(projectRows) });
+    await upsertProjectRollup({ key: project, rangeKey, startDate, endDate, ...summarize(projectRows) }, db);
   }
 }
 
-export async function computeAndStoreScores(rangeKey: RangeKey, startDate: string, endDate: string): Promise<void> {
-  const settings = await getKpiSettings();
-  const rows = await getScoringInputRowsForRange(rangeKey);
+export async function computeAndStoreScores(rangeKey: RangeKey, startDate: string, endDate: string, db?: DbExecutor): Promise<void> {
+  const settings = await getKpiSettings(db);
+  const rows = await getScoringInputRowsForRange(rangeKey, db);
   const scored = rows.map((row) => ({
     row,
     result: computeUrlScore({
@@ -271,9 +379,14 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
       previousImpressions: row.previous_impressions,
     }, settings),
   }));
-  for (const { row, result } of scored) {
-    await upsertUrlPerformanceScore({ contentUrlId: row.content_url_id, rangeKey, startDate, endDate, projectType: row.project_type, result });
-  }
+  await bulkUpsertUrlPerformanceScores(scored.map(({ row, result }) => ({
+    contentUrlId: row.content_url_id,
+    rangeKey,
+    startDate,
+    endDate,
+    projectType: row.project_type,
+    result,
+  })), db);
   const byMember = new Map<string, typeof scored>();
   const byProject = new Map<string, typeof scored>();
   for (const item of scored) {
@@ -285,13 +398,17 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
     byProject.get(projectKey)!.push(item);
   }
   for (const [memberName, items] of byMember) {
-    const aggregate = aggregateScore(items.map((item) => item.result), settings.urlWeightCapPct);
-    const email = items.find((item) => item.row.member_email)?.row.member_email ?? null;
-    await upsertMemberScore(email, { key: memberName, rangeKey, startDate, endDate, ...aggregate });
+    await upsertMemberScore(
+      items.find((item) => item.row.member_email)?.row.member_email ?? null,
+      { key: memberName, rangeKey, startDate, endDate, ...aggregateScore(items.map((item) => item.result), settings.urlWeightCapPct) },
+      db,
+    );
   }
   for (const [project, items] of byProject) {
-    const aggregate = aggregateScore(items.map((item) => item.result), settings.urlWeightCapPct);
-    await upsertProjectScore({ key: project, rangeKey, startDate, endDate, ...aggregate });
+    await upsertProjectScore(
+      { key: project, rangeKey, startDate, endDate, ...aggregateScore(items.map((item) => item.result), settings.urlWeightCapPct) },
+      db,
+    );
   }
 }
 
@@ -310,14 +427,10 @@ function summarize(rows: Array<{
   const impressions = okRows.reduce((sum, row) => sum + Number(row.impressions ?? 0), 0);
   const ctr = impressions > 0 ? clicks / impressions : 0;
   const positionRows = okRows.filter((row) => row.position !== null);
-  const position = positionRows.length
-    ? positionRows.reduce((sum, row) => sum + Number(row.position ?? 0), 0) / positionRows.length
-    : null;
+  const position = positionRows.length ? positionRows.reduce((sum, row) => sum + Number(row.position ?? 0), 0) / positionRows.length : null;
   const hasPrevious = okRows.some((row) => row.previous_clicks !== null || row.previous_impressions !== null);
   const previousClicks = hasPrevious ? okRows.reduce((sum, row) => sum + Number(row.previous_clicks ?? 0), 0) : null;
   const previousImpressions = hasPrevious ? okRows.reduce((sum, row) => sum + Number(row.previous_impressions ?? 0), 0) : null;
-  const clickDelta = previousClicks === null ? null : clicks - previousClicks;
-  const impressionDelta = previousImpressions === null ? null : impressions - previousImpressions;
   return {
     urlCount: rows.length,
     urlsWithData: okRows.length,
@@ -331,9 +444,9 @@ function summarize(rows: Array<{
     position,
     previousClicks,
     previousImpressions,
-    clickDelta,
+    clickDelta: previousClicks === null ? null : clicks - previousClicks,
     clickGrowthPct: growthPct(previousClicks, clicks),
-    impressionDelta,
+    impressionDelta: previousImpressions === null ? null : impressions - previousImpressions,
     impressionGrowthPct: growthPct(previousImpressions, impressions),
   };
 }

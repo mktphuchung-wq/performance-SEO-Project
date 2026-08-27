@@ -1,4 +1,5 @@
 import { query, type DbExecutor } from "@/lib/db";
+import { getSyncBulkChunkSize } from "@/lib/env";
 import type { GrowthResult } from "@/lib/performance/growth";
 import type { RangeKey } from "@/lib/ranges";
 
@@ -125,6 +126,102 @@ export async function bulkUpsertPerformanceCache(inputs: UpsertPerformanceCacheI
   else await query(sql, [JSON.stringify(payload)]);
 }
 
+export async function bulkStagePerformanceCache(
+  refreshRunId: string,
+  inputs: UpsertPerformanceCacheInput[],
+  db?: DbExecutor,
+): Promise<void> {
+  if (inputs.length === 0) return;
+  const toPayload = (rows: UpsertPerformanceCacheInput[]) => rows.map((input) => ({
+    refresh_run_id: refreshRunId,
+    content_url_id: input.contentUrlId,
+    range_key: input.rangeKey,
+    start_date: input.startDate,
+    end_date: input.endDate,
+    previous_start_date: input.previousStartDate,
+    previous_end_date: input.previousEndDate,
+    clicks: input.growth.clicks,
+    impressions: input.growth.impressions,
+    ctr: input.growth.ctr,
+    position: input.growth.position,
+    previous_clicks: input.growth.previousClicks,
+    previous_impressions: input.growth.previousImpressions,
+    previous_ctr: input.growth.previousCtr,
+    previous_position: input.growth.previousPosition,
+    click_delta: input.growth.clickDelta,
+    click_growth_pct: input.growth.clickGrowthPct,
+    impression_delta: input.growth.impressionDelta,
+    impression_growth_pct: input.growth.impressionGrowthPct,
+    growth_status: input.growth.growthStatus,
+    data_status: input.growth.dataStatus,
+    error_message: input.errorMessage ?? null,
+  }));
+  const sql = `insert into public.seo_performance_cache_stage
+      (refresh_run_id, content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
+       clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
+       click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
+       error_message, updated_at)
+    select x.refresh_run_id, x.content_url_id, x.range_key, x.start_date, x.end_date,
+           x.previous_start_date, x.previous_end_date, x.clicks, x.impressions, x.ctr, x.position,
+           x.previous_clicks, x.previous_impressions, x.previous_ctr, x.previous_position,
+           x.click_delta, x.click_growth_pct, x.impression_delta, x.impression_growth_pct,
+           x.growth_status, x.data_status, x.error_message, now()
+    from jsonb_to_recordset($1::jsonb) as x(
+      refresh_run_id uuid, content_url_id uuid, range_key text, start_date date, end_date date,
+      previous_start_date date, previous_end_date date, clicks numeric, impressions numeric,
+      ctr numeric, position numeric, previous_clicks numeric, previous_impressions numeric,
+      previous_ctr numeric, previous_position numeric, click_delta numeric, click_growth_pct numeric,
+      impression_delta numeric, impression_growth_pct numeric, growth_status text, data_status text,
+      error_message text
+    )
+    on conflict (refresh_run_id, content_url_id) do update set
+      clicks = excluded.clicks, impressions = excluded.impressions, ctr = excluded.ctr, position = excluded.position,
+      previous_clicks = excluded.previous_clicks, previous_impressions = excluded.previous_impressions,
+      previous_ctr = excluded.previous_ctr, previous_position = excluded.previous_position,
+      click_delta = excluded.click_delta, click_growth_pct = excluded.click_growth_pct,
+      impression_delta = excluded.impression_delta, impression_growth_pct = excluded.impression_growth_pct,
+      growth_status = excluded.growth_status, data_status = excluded.data_status,
+      error_message = excluded.error_message, updated_at = now()`;
+  const chunkSize = getSyncBulkChunkSize();
+  for (let offset = 0; offset < inputs.length; offset += chunkSize) {
+    const params = [JSON.stringify(toPayload(inputs.slice(offset, offset + chunkSize)))];
+    if (db) await db.query(sql, params);
+    else await query(sql, params);
+  }
+}
+
+export async function getStagedPerformanceCount(refreshRunId: string, db?: DbExecutor): Promise<number> {
+  const sql = "select count(*)::int as count from public.seo_performance_cache_stage where refresh_run_id = $1";
+  const rows = db ? (await db.query<{ count: number }>(sql, [refreshRunId])).rows : await query<{ count: number }>(sql, [refreshRunId]);
+  return rows[0]?.count ?? 0;
+}
+
+export async function publishStagedPerformanceCache(refreshRunId: string, db: DbExecutor): Promise<void> {
+  await db.query(
+    `insert into public.seo_performance_cache
+       (content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
+        clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
+        click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
+        error_message, refreshed_at, updated_at)
+     select content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
+            clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
+            click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
+            error_message, now(), now()
+     from public.seo_performance_cache_stage where refresh_run_id = $1
+     on conflict (content_url_id, range_key) do update set
+       start_date = excluded.start_date, end_date = excluded.end_date,
+       previous_start_date = excluded.previous_start_date, previous_end_date = excluded.previous_end_date,
+       clicks = excluded.clicks, impressions = excluded.impressions, ctr = excluded.ctr, position = excluded.position,
+       previous_clicks = excluded.previous_clicks, previous_impressions = excluded.previous_impressions,
+       previous_ctr = excluded.previous_ctr, previous_position = excluded.previous_position,
+       click_delta = excluded.click_delta, click_growth_pct = excluded.click_growth_pct,
+       impression_delta = excluded.impression_delta, impression_growth_pct = excluded.impression_growth_pct,
+       growth_status = excluded.growth_status, data_status = excluded.data_status,
+       error_message = excluded.error_message, refreshed_at = now(), updated_at = now()`,
+    [refreshRunId],
+  );
+}
+
 export interface UrlPerformanceRow {
   id: string;
   content_url_id: string;
@@ -229,6 +326,21 @@ export interface RangeFreshness {
   error_urls: number;
 }
 
+interface PerformanceAggregateRow {
+  content_url_id: string;
+  project: string;
+  member_name: string;
+  member_email: string | null;
+  clicks: number | null;
+  impressions: number | null;
+  ctr: number | null;
+  position: number | null;
+  previous_clicks: number | null;
+  previous_impressions: number | null;
+  growth_status: string;
+  data_status: string;
+}
+
 /**
  * How current each range's cached data is. The dashboard reads Postgres, never
  * GSC, so this is what tells a user whether what they're looking at is stale
@@ -249,29 +361,12 @@ export async function getRangeFreshness(): Promise<RangeFreshness[]> {
   );
 }
 
-export async function getPerformanceRowsForRange(rangeKey: RangeKey): Promise<
-  Array<{
-    content_url_id: string;
-    project: string;
-    member_name: string;
-    member_email: string | null;
-    clicks: number | null;
-    impressions: number | null;
-    ctr: number | null;
-    position: number | null;
-    previous_clicks: number | null;
-    previous_impressions: number | null;
-    growth_status: string;
-    data_status: string;
-  }>
-> {
-  return query(
-    `select p.content_url_id, c.project, c.member_name, c.member_email,
-            p.clicks, p.impressions, p.ctr, p.position,
-            p.previous_clicks, p.previous_impressions, p.growth_status, p.data_status
-     from public.seo_performance_cache p
-     join public.content_urls c on c.id = p.content_url_id
-     where p.range_key = $1 and c.is_active = true`,
-    [rangeKey],
-  );
+export async function getPerformanceRowsForRange(rangeKey: RangeKey, db?: DbExecutor): Promise<PerformanceAggregateRow[]> {
+  const sql = `select p.content_url_id, c.project, c.member_name, c.member_email,
+             p.clicks, p.impressions, p.ctr, p.position,
+             p.previous_clicks, p.previous_impressions, p.growth_status, p.data_status
+      from public.seo_performance_cache p
+      join public.content_urls c on c.id = p.content_url_id
+      where p.range_key = $1 and c.is_active = true`;
+  return db ? (await db.query<PerformanceAggregateRow>(sql, [rangeKey])).rows : query<PerformanceAggregateRow>(sql, [rangeKey]);
 }

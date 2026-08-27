@@ -1,4 +1,4 @@
-import { query, queryOne } from "@/lib/db";
+import { query, queryOne, type DbExecutor } from "@/lib/db";
 import type { KpiPeriodWeights } from "@/lib/performance/composite-score";
 import type { KpiSettings } from "@/lib/performance/score";
 
@@ -37,8 +37,8 @@ export const KPI_SETTINGS_COLUMNS = [
 
 export type KpiSettingsColumn = (typeof KPI_SETTINGS_COLUMNS)[number];
 
-export async function getKpiSettings(): Promise<KpiSettings> {
-  const row = await getKpiSettingsRow();
+export async function getKpiSettings(db?: DbExecutor): Promise<KpiSettings> {
+  const row = await getKpiSettingsRow(db);
   return {
     targetGrowthPct: {
       new: Number(row.target_growth_pct_new),
@@ -75,8 +75,10 @@ export async function getCompositeKpiSettings(): Promise<CompositeKpiSettings> {
   };
 }
 
-export async function getKpiSettingsRow(): Promise<KpiSettingsRow> {
-  const row = await queryOne<KpiSettingsRow>("select * from public.kpi_settings where id = 1");
+export async function getKpiSettingsRow(db?: DbExecutor): Promise<KpiSettingsRow> {
+  const row = db
+    ? (await db.query<KpiSettingsRow>("select * from public.kpi_settings where id = 1")).rows[0] ?? null
+    : await queryOne<KpiSettingsRow>("select * from public.kpi_settings where id = 1");
   if (!row) throw new Error("kpi_settings row missing — did migration 004 run?");
   return row;
 }

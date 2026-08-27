@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, type DbExecutor } from "@/lib/db";
 import type { RangeKey } from "@/lib/ranges";
 
 export interface RollupInput {
@@ -25,8 +25,8 @@ export interface RollupInput {
   impressionGrowthPct: number | null;
 }
 
-export async function upsertMemberRollup(memberEmail: string | null, input: RollupInput): Promise<void> {
-  await query(
+export async function upsertMemberRollup(memberEmail: string | null, input: RollupInput, db?: DbExecutor): Promise<void> {
+  const sql =
     `insert into public.member_performance_rollup
        (member_name, member_email, range_key, start_date, end_date, url_count, urls_with_data,
         growing_urls, stable_urls, declining_urls, no_data_urls, clicks, impressions, ctr, position,
@@ -54,8 +54,8 @@ export async function upsertMemberRollup(memberEmail: string | null, input: Roll
        impression_delta = excluded.impression_delta,
        impression_growth_pct = excluded.impression_growth_pct,
        refreshed_at = now(),
-       updated_at = now()`,
-    [
+       updated_at = now()`;
+  const params = [
       input.key,
       memberEmail,
       input.rangeKey,
@@ -77,12 +77,13 @@ export async function upsertMemberRollup(memberEmail: string | null, input: Roll
       input.clickGrowthPct,
       input.impressionDelta,
       input.impressionGrowthPct,
-    ],
-  );
+     ];
+  if (db) await db.query(sql, params);
+  else await query(sql, params);
 }
 
-export async function upsertProjectRollup(input: RollupInput): Promise<void> {
-  await query(
+export async function upsertProjectRollup(input: RollupInput, db?: DbExecutor): Promise<void> {
+  const sql =
     `insert into public.project_performance_rollup
        (project, range_key, start_date, end_date, url_count, urls_with_data,
         growing_urls, stable_urls, declining_urls, no_data_urls, clicks, impressions, ctr, position,
@@ -109,8 +110,8 @@ export async function upsertProjectRollup(input: RollupInput): Promise<void> {
        impression_delta = excluded.impression_delta,
        impression_growth_pct = excluded.impression_growth_pct,
        refreshed_at = now(),
-       updated_at = now()`,
-    [
+       updated_at = now()`;
+  const params = [
       input.key,
       input.rangeKey,
       input.startDate,
@@ -131,8 +132,9 @@ export async function upsertProjectRollup(input: RollupInput): Promise<void> {
       input.clickGrowthPct,
       input.impressionDelta,
       input.impressionGrowthPct,
-    ],
-  );
+     ];
+  if (db) await db.query(sql, params);
+  else await query(sql, params);
 }
 
 /** Columns every rollup table shares; the member/project keys are added on top. */

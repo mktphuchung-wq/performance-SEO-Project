@@ -190,9 +190,10 @@ via `pg`, Google Sheets + Search Console APIs via `googleapis`, Recharts.
   rollups too: a range with no previous window stores `null` deltas, not `0`.
 - A URL gaining data with no prior-period baseline is recorded as `new_signal` (positive), not as a decline.
 - Migrations only ever add — never run destructive migrations against production data.
-- Sync and refresh are queued server-side and expose progress through lightweight status polling. Sheet writes use
-  hash-diffed bulk upserts in one transaction; GSC refreshes query all tracked pages by property with bounded
-  concurrency, retry/backoff, and an exact-URL fallback when a property rejects wide queries.
+- Sync and refresh are queued in Postgres and expose progress through lightweight status polling. Refresh work is
+  leased per property or exact-query chunk, checkpointed into a staging table, and atomically published only after
+  every URL has a terminal status. GSC calls use a single global concurrency limit, retry/backoff, request budgets,
+  and a bounded exact-URL fallback only when a property explicitly rejects wide queries.
 
   Because of that rule, replacing the calendar-month ranges left their cached rows behind.
   Nothing reads them. To reclaim the space, run this by hand once (cache only — every value
@@ -285,6 +286,8 @@ npm run lint          # eslint
 npm run migrate       # apply pending migrations/*.sql against DATABASE_URL
 
 node scripts/verify-score.mjs   # arithmetic self-check of the KPI formula (no DB, no network)
+node scripts/verify-refresh-range.mjs   # refresh error classification and no-data rules
+node scripts/verify-refresh-db.mjs   # validate refresh migration against DATABASE_URL, always rolls back
 node scripts/verify-content-review.mjs   # Content KPI rules — needs DATABASE_URL, always rolls back
 ```
 

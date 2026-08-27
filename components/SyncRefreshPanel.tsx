@@ -8,11 +8,18 @@ import { Button, Card, CardHeader, Checkbox } from "@/components/ui";
 interface RefreshRunState {
   id: string;
   status: string;
+  phase: string;
+  range_key: string;
   total_urls: number;
   processed_urls: number;
   urls_with_data: number;
   no_data_urls: number;
   failed_urls: number;
+  total_items: number;
+  completed_items: number;
+  retry_count: number;
+  gsc_call_count: number;
+  heartbeat_at: string;
   error_message?: string | null;
 }
 
@@ -48,6 +55,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   function pollRun<T extends { status: string; error_message?: string | null }>(url: string, onUpdate: (run: T) => void): Promise<T> {
     return new Promise((resolve, reject) => {
       let inFlight = false;
+      let consecutiveFailures = 0;
       const poll = async () => {
         if (inFlight) return;
         inFlight = true;
@@ -56,15 +64,19 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error ?? "Could not read run status");
           const current = data.run as T;
+          consecutiveFailures = 0;
           onUpdate(current);
-          if (current.status === "success" || current.status === "failed") {
+          if (["success", "partial", "failed", "cancelled"].includes(current.status)) {
             clearInterval(timer);
-            if (current.status === "failed") reject(new Error(current.error_message ?? "Job failed"));
+            if (current.status === "failed" || current.status === "cancelled") reject(new Error(current.error_message ?? "Job failed"));
             else resolve(current);
           }
         } catch (error) {
-          clearInterval(timer);
-          reject(error);
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 5) {
+            clearInterval(timer);
+            reject(error);
+          }
         } finally {
           inFlight = false;
         }
@@ -117,7 +129,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     }
   }
 
-  async function refreshRange(rangeKey: string) {
+  async function refreshRange(rangeKey: string): Promise<RefreshRunState> {
     // Clear the previous range's counters before awaiting /start, otherwise the
     // finished range's 100% totals render under the next range's label.
     setRun(null);
@@ -128,18 +140,55 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     });
     const startData = await startRes.json();
     if (!startRes.ok && startRes.status !== 409) throw new Error(startData.error ?? "Failed to start refresh");
+    if (startRes.status === 409 && startData.rangeKey !== rangeKey) {
+      throw new Error(`Another range is already running: ${RANGE_LABELS[startData.rangeKey] ?? startData.rangeKey}`);
+    }
 
     const runId = startData.run?.id ?? startData.runId;
     if (!runId) throw new Error(startData.error ?? "Failed to start refresh");
     let currentRun: RefreshRunState = startData.run ?? {
-      id: runId, status: "queued", total_urls: 0, processed_urls: 0, urls_with_data: 0, no_data_urls: 0, failed_urls: 0,
+      id: runId, status: "queued", phase: "planning", range_key: rangeKey,
+      total_urls: 0, processed_urls: 0, urls_with_data: 0, no_data_urls: 0, failed_urls: 0,
+      total_items: 0, completed_items: 0, retry_count: 0, gsc_call_count: 0, heartbeat_at: new Date().toISOString(),
     };
     setRun(currentRun);
-    currentRun = await pollRun<RefreshRunState>(
-      `/api/refresh/status?id=${encodeURIComponent(runId)}`,
-      setRun,
-    );
+    let statusFailures = 0;
+    let statusInFlight = false;
+    const statusTimer = setInterval(() => {
+      if (statusInFlight) return;
+      statusInFlight = true;
+      void fetch(`/api/refresh/status?id=${encodeURIComponent(runId)}`, { cache: "no-store" })
+        .then(async (response) => {
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error ?? "Could not read refresh status");
+          statusFailures = 0;
+          setRun(data.run as RefreshRunState);
+        })
+        .catch(() => { statusFailures += 1; })
+        .finally(() => { statusInFlight = false; });
+    }, 2500);
+    try {
+      while (["queued", "running"].includes(currentRun.status)) {
+        const processRes = await fetch("/api/refresh/process", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refreshRunId: runId }),
+        });
+        const processData = await processRes.json();
+        if (!processRes.ok) throw new Error(processData.error ?? "Refresh item failed");
+        currentRun = processData.run as RefreshRunState;
+        setRun(currentRun);
+        if (!processData.done && !processData.processedItem) await new Promise((resolve) => setTimeout(resolve, 2500));
+        if (statusFailures >= 5) setRefreshError("Status connection interrupted; the refresh worker is still retrying.");
+      }
+    } finally {
+      clearInterval(statusTimer);
+    }
+    if (currentRun.status === "failed" || currentRun.status === "cancelled") {
+      throw new Error(currentRun.error_message ?? "Refresh failed");
+    }
     setRun(currentRun);
+    return currentRun;
   }
 
   function toggleRange(rangeKey: RangeKey, checked: boolean) {
@@ -169,8 +218,11 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
         setActiveRange(target);
         setRangeIndex(index);
         try {
-          await refreshRange(target);
+          const finalRun = await refreshRange(target);
           completed += 1;
+          if (finalRun.status === "partial") {
+            failures.push(`${RANGE_LABELS[target] ?? target}: ${finalRun.error_message ?? `${finalRun.failed_urls} URL(s) failed`}`);
+          }
         } catch (error) {
           failures.push(`${RANGE_LABELS[target] ?? target}: ${(error as Error).message}`);
         }
@@ -259,6 +311,9 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
                 {activeRange && <span className="font-medium text-ink">{RANGE_LABELS[activeRange]}: </span>}
                 {run.processed_urls}/{run.total_urls} · {run.urls_with_data} with data · {run.no_data_urls} no data ·{" "}
                 <span className={run.failed_urls > 0 ? "text-negative" : undefined}>{run.failed_urls} failed</span>
+              </div>
+              <div className="numeric text-xs text-ink-subtle">
+                {run.phase.replaceAll("_", " ")} · {run.completed_items}/{run.total_items} items · {run.gsc_call_count} GSC calls · {run.retry_count} retries · heartbeat {run.heartbeat_at.slice(11, 19)} UTC
               </div>
             </div>
           )}
