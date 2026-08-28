@@ -1,5 +1,6 @@
 import { query, type DbExecutor } from "@/lib/db";
 import { getSyncBulkChunkSize } from "@/lib/env";
+import { memberAttributionPredicate } from "@/lib/repositories/content-url-works";
 import type { ProjectType, UrlScoreResult } from "@/lib/performance/score";
 import type { RangeKey } from "@/lib/ranges";
 
@@ -169,7 +170,10 @@ export async function listUrlScores(
   }
   if (filters.memberName) {
     params.push(filters.memberName);
-    conditions.push(`c.member_name = $${params.length}`);
+    // Same rule the score itself was aggregated by, over the window the score row
+    // records — filtering on c.member_name alone would list a different set of
+    // URLs than the number next to the member's name was computed from.
+    conditions.push(memberAttributionPredicate("s.content_url_id", "s.start_date", "s.end_date", `$${params.length}`));
   }
 
   return query<UrlScoreDisplayRow>(

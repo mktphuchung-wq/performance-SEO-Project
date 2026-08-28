@@ -136,7 +136,7 @@ export const RANGE_SHORT_LABELS: Record<string, string> = {
 export const DATA_STATUS_LABELS: Record<string, string> = {
   ok: "OK",
   no_data: "No data",
-  not_eligible: "Not eligible yet",
+  not_eligible: "Published after this window",
   error: "Config error",
 };
 

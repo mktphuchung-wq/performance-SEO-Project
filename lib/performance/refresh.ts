@@ -16,6 +16,7 @@ import {
 import { classifyGoogleApiError, isWideQueryUnsupported } from "@/lib/google-errors";
 import { computeGrowth, type PeriodMetrics } from "@/lib/performance/growth";
 import { aggregateScore, computeUrlScore } from "@/lib/performance/score";
+import { getUrlAttributionForRange, type UrlAttributionRow } from "@/lib/repositories/content-url-works";
 import { listActiveContentUrls, listContentUrlsByIds, type ContentUrl } from "@/lib/repositories/content-urls";
 import { getKpiSettings } from "@/lib/repositories/kpi-settings";
 import { upsertMemberScore, upsertProjectScore } from "@/lib/repositories/kpi-score-rollups";
@@ -49,8 +50,17 @@ export async function startRefresh(triggeredBy: string | null, rangeKey: RangeKe
   return createRefreshRun(triggeredBy, range, await listActiveContentUrls());
 }
 
+/**
+ * A URL is only "not there yet" when the first thing anyone did to it was create
+ * it, and that had not happened by the end of the window.
+ *
+ * This reads published_at, never worked_at. Auditing or updating an already-live
+ * URL is work done *on* it, and says nothing about when it went live — treating
+ * the audit date as a birth date is what used to throw away the real Search
+ * Console history of long-lived pages the moment somebody audited them.
+ */
 function isEligible(contentUrl: ContentUrl, endDate: string): boolean {
-  return !contentUrl.worked_at || contentUrl.worked_at <= endDate;
+  return !contentUrl.published_at || contentUrl.published_at <= endDate;
 }
 
 function apiError(error: unknown, property: string): string {
@@ -340,21 +350,54 @@ async function publishRefreshRun(run: RefreshRun): Promise<void> {
   });
 }
 
+/**
+ * Who each URL counts for in this window, indexed by URL. A URL can land under
+ * more than one member — see getUrlAttributionForRange.
+ */
+function attributionIndex(rows: UrlAttributionRow[]): Map<string, UrlAttributionRow[]> {
+  const index = new Map<string, UrlAttributionRow[]>();
+  for (const row of rows) {
+    const owners = index.get(row.content_url_id);
+    if (owners) owners.push(row);
+    else index.set(row.content_url_id, [row]);
+  }
+  return index;
+}
+
+/**
+ * Fan one URL's row out to every member credited with it. Falls back to the
+ * URL's own member so a row can never be dropped for lack of an attribution
+ * entry, whatever the state of the work log.
+ */
+function ownersOf(
+  index: Map<string, UrlAttributionRow[]>,
+  row: { content_url_id: string; member_name: string; member_email: string | null },
+): UrlAttributionRow[] {
+  return index.get(row.content_url_id) ?? [
+    { content_url_id: row.content_url_id, member_name: row.member_name, member_email: row.member_email },
+  ];
+}
+
 export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: string, endDate: string, db?: DbExecutor): Promise<void> {
   const rows = await getPerformanceRowsForRange(rangeKey, db);
+  const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));
   const byMember = new Map<string, typeof rows>();
+  const memberEmails = new Map<string, string | null>();
   const byProject = new Map<string, typeof rows>();
   for (const row of rows) {
-    const memberKey = row.member_name || "(unassigned)";
     const projectKey = row.project || "(unassigned)";
-    if (!byMember.has(memberKey)) byMember.set(memberKey, []);
     if (!byProject.has(projectKey)) byProject.set(projectKey, []);
-    byMember.get(memberKey)!.push(row);
     byProject.get(projectKey)!.push(row);
+    for (const owner of ownersOf(index, row)) {
+      const memberKey = owner.member_name || "(unassigned)";
+      if (!byMember.has(memberKey)) byMember.set(memberKey, []);
+      byMember.get(memberKey)!.push(row);
+      if (!memberEmails.get(memberKey)) memberEmails.set(memberKey, owner.member_email);
+    }
   }
   for (const [memberName, memberRows] of byMember) {
     await upsertMemberRollup(
-      memberRows.find((row) => row.member_email)?.member_email ?? null,
+      memberEmails.get(memberName) ?? null,
       { key: memberName, rangeKey, startDate, endDate, ...summarize(memberRows) },
       db,
     );
@@ -387,19 +430,24 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
     projectType: row.project_type,
     result,
   })), db);
+  const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));
   const byMember = new Map<string, typeof scored>();
+  const memberEmails = new Map<string, string | null>();
   const byProject = new Map<string, typeof scored>();
   for (const item of scored) {
-    const memberKey = item.row.member_name || "(unassigned)";
     const projectKey = item.row.project || "(unassigned)";
-    if (!byMember.has(memberKey)) byMember.set(memberKey, []);
     if (!byProject.has(projectKey)) byProject.set(projectKey, []);
-    byMember.get(memberKey)!.push(item);
     byProject.get(projectKey)!.push(item);
+    for (const owner of ownersOf(index, item.row)) {
+      const memberKey = owner.member_name || "(unassigned)";
+      if (!byMember.has(memberKey)) byMember.set(memberKey, []);
+      byMember.get(memberKey)!.push(item);
+      if (!memberEmails.get(memberKey)) memberEmails.set(memberKey, owner.member_email);
+    }
   }
   for (const [memberName, items] of byMember) {
     await upsertMemberScore(
-      items.find((item) => item.row.member_email)?.row.member_email ?? null,
+      memberEmails.get(memberName) ?? null,
       { key: memberName, rangeKey, startDate, endDate, ...aggregateScore(items.map((item) => item.result), settings.urlWeightCapPct) },
       db,
     );

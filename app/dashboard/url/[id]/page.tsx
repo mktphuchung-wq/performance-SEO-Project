@@ -16,6 +16,7 @@ import {
 } from "@/lib/format";
 import type { UrlPerformanceRow } from "@/lib/repositories/performance-cache";
 import type { ContentUrl } from "@/lib/repositories/content-urls";
+import type { ContentUrlWork } from "@/lib/repositories/content-url-works";
 
 const statusTone: Record<string, BadgeTone> = {
   ok: "positive",
@@ -36,6 +37,7 @@ export default function UrlDetailPage() {
   const params = useParams<{ id: string }>();
   const [contentUrl, setContentUrl] = useState<ContentUrl | null>(null);
   const [rows, setRows] = useState<UrlPerformanceRow[]>([]);
+  const [works, setWorks] = useState<ContentUrlWork[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -49,6 +51,7 @@ export default function UrlDetailPage() {
       .then((data) => {
         setContentUrl(data.contentUrl);
         setRows(data.rows ?? []);
+        setWorks(data.works ?? []);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -95,11 +98,48 @@ export default function UrlDetailPage() {
           {contentUrl.worked_at && (
             <>
               <span className="text-ink-subtle">·</span>
-              <span>worked {contentUrl.worked_at}</span>
+              <span>last worked {contentUrl.worked_at}</span>
             </>
           )}
+          <span className="text-ink-subtle">·</span>
+          <span>{contentUrl.published_at ? `published ${contentUrl.published_at}` : "already live"}</span>
         </div>
       </div>
+
+      {works.length > 0 && (
+        <Card>
+          <CardHeader
+            title="Work history"
+            description="Every row the Sheet holds for this URL. Only a row that created the URL sets its published date; audits and updates never withhold Search Console data."
+          />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
+                  <th className="px-4 py-2.5">Date</th>
+                  <th className="px-4 py-2.5">Type</th>
+                  <th className="px-4 py-2.5">Member</th>
+                  <th className="px-4 py-2.5">Counts as</th>
+                </tr>
+              </thead>
+              <tbody>
+                {works.map((work) => (
+                  <tr key={work.id} className="border-b border-line last:border-0">
+                    <td className="whitespace-nowrap px-4 py-2.5 numeric text-ink">{work.worked_at ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-ink-muted">{work.work_type || "—"}</td>
+                    <td className="px-4 py-2.5 text-ink-muted">{work.member_name || "—"}</td>
+                    <td className="px-4 py-2.5">
+                      <Badge tone={work.work_kind === "new" ? "accent" : "neutral"}>
+                        {work.work_kind === "new" ? "New URL" : "Work on existing URL"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {chartData.length > 0 && (
         <Card>
