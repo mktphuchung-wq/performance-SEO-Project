@@ -260,7 +260,7 @@ export async function completeRefreshItem(
          completed_items = completed_items + 1, retry_count = retry_count + $7,
          gsc_query_ms = coalesce(gsc_query_ms, 0) + $8, db_write_ms = coalesce(db_write_ms, 0) + $9,
          gsc_call_count = gsc_call_count + $10, phase = 'staging', heartbeat_at = now(), updated_at = now()
-       where id = $1 and status = 'running'`,
+       where id = $1 and status = 'running' returning id`,
       [runId, values.processed, values.withData, values.noData, values.failed,
         values.contentUrlIds,
         values.retries, values.gscQueryMs, values.dbWriteMs, values.apiCalls],
