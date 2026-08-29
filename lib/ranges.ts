@@ -57,6 +57,75 @@ function dataCutoff(): string {
   return addDays(toIso(new Date()), -GSC_DATA_LAG_DAYS);
 }
 
+function monthStartOf(iso: string): string {
+  return `${iso.slice(0, 7)}-01`;
+}
+
+function monthEndOf(monthStart: string): string {
+  const date = new Date(`${monthStart}T00:00:00.000Z`);
+  return toIso(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)));
+}
+
+export interface CalendarMonth {
+  startDate: string;
+  endDate: string;
+}
+
+/**
+ * The most recent `count` calendar months that have fully closed, newest first.
+ *
+ * "Closed" is measured against the Search Console cutoff, not today: a month
+ * whose last days are still inside the reporting lag would be recorded short and
+ * then look like a decline forever, since these rows are the permanent history.
+ */
+export function closedCalendarMonths(count: number, endingBefore?: string): CalendarMonth[] {
+  if (count < 1) return [];
+  const cutoff = endingBefore ?? dataCutoff();
+  const cutoffMonth = monthStartOf(cutoff);
+  // The cutoff's own month only counts once the cutoff has passed its last day.
+  const latest = monthEndOf(cutoffMonth) <= cutoff ? cutoffMonth : addMonths(cutoffMonth, -1);
+
+  const months: CalendarMonth[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const startDate = addMonths(latest, -index);
+    months.push({ startDate, endDate: monthEndOf(startDate) });
+  }
+  return months;
+}
+
+export interface BaselineWindow {
+  startDate: string;
+  endDate: string;
+  /** How many calendar months the window spans — every one must have data for the sample to count. */
+  months: number;
+}
+
+/**
+ * The windows a range's baseline is measured over: `lookbackPeriods` blocks of
+ * the same width as the range itself, laid end to end going backwards.
+ *
+ * Calendar-month aligned and stopping short of `startDate`'s own month, so no
+ * block ever shares data with the window being scored — a baseline that overlaps
+ * the current period compares a number against itself and flattens real movement.
+ *
+ * Returns [] for a range with no rolling width (all_time, custom), which leaves
+ * the caller on the legacy previous-period value.
+ */
+export function baselineWindows(rangeKey: RangeKey, startDate: string, lookbackPeriods: number): BaselineWindow[] {
+  const months = ROLLING_MONTHS[rangeKey];
+  if (!months || lookbackPeriods < 1) return [];
+
+  // The last calendar month that ended before the scored window opened.
+  const anchor = addMonths(monthStartOf(startDate), -1);
+  const windows: BaselineWindow[] = [];
+  for (let period = 0; period < lookbackPeriods; period += 1) {
+    const blockEndMonth = addMonths(anchor, -(period * months));
+    const blockStartMonth = addMonths(blockEndMonth, -(months - 1));
+    windows.push({ startDate: blockStartMonth, endDate: monthEndOf(blockEndMonth), months });
+  }
+  return windows;
+}
+
 function previousPeriodOf(startDate: string, endDate: string): { previousStartDate: string; previousEndDate: string } {
   const days =
     Math.round(

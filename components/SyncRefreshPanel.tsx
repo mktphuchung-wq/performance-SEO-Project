@@ -52,6 +52,11 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
   const [recomputeFailed, setRecomputeFailed] = useState(false);
+
+  const [snapshotMonths, setSnapshotMonths] = useState("1");
+  const [snapshotting, setSnapshotting] = useState(false);
+  const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
+  const [snapshotFailed, setSnapshotFailed] = useState(false);
   function pollRun<T extends { status: string; error_message?: string | null }>(url: string, onUpdate: (run: T) => void): Promise<T> {
     return new Promise((resolve, reject) => {
       let inFlight = false;
@@ -101,6 +106,33 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
       setRecomputeMessage((error as Error).message);
     } finally {
       setRecomputing(false);
+    }
+  }
+
+  async function handleSnapshot() {
+    setSnapshotting(true);
+    setSnapshotMessage(null);
+    setSnapshotFailed(false);
+    try {
+      const res = await fetch("/api/admin/monthly-snapshot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ months: Number(snapshotMonths) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not record monthly history");
+      const errors = (data.errors ?? []) as string[];
+      setSnapshotFailed(errors.length > 0);
+      setSnapshotMessage(
+        `${data.rowsWritten} row(s) across ${data.months.length} month(s) · ${data.flagged} flagged · ${data.reconciled} settled`
+        + (errors.length > 0 ? ` · ${errors.length} error(s): ${errors[0]}` : ""),
+      );
+      onDone?.();
+    } catch (error) {
+      setSnapshotFailed(true);
+      setSnapshotMessage((error as Error).message);
+    } finally {
+      setSnapshotting(false);
     }
   }
 
@@ -332,6 +364,39 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
         </Button>
         {recomputeMessage && (
           <p className={`text-[13px] ${recomputeFailed ? "text-negative" : "text-ink-muted"}`}>{recomputeMessage}</p>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t border-line px-5 py-4">
+        <h3 className="text-[13px] font-medium text-ink">4 · Record monthly history</h3>
+        <p className="text-[13px] leading-5 text-ink-muted">
+          Stores closed calendar months so a score can be graded against several past periods instead of only the one
+          before it, and flags months that stand far out from a URL&apos;s own history so they do not become the
+          yardstick for the month after. Run it once a month; run it with a larger number of months once, to backfill.
+          It does call Search Console, one query per property per month.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-[13px] text-ink">
+            Months
+            <input
+              type="number"
+              min={1}
+              max={16}
+              value={snapshotMonths}
+              onChange={(e) => setSnapshotMonths(e.target.value)}
+              className="w-20 rounded-lg border border-line-strong px-2 py-1 text-sm"
+            />
+          </label>
+          <Button
+            variant="secondary"
+            onClick={handleSnapshot}
+            disabled={snapshotting || recomputing || syncing || refreshing}
+          >
+            {snapshotting ? "Recording…" : "Record monthly history"}
+          </Button>
+        </div>
+        {snapshotMessage && (
+          <p className={`text-[13px] ${snapshotFailed ? "text-negative" : "text-ink-muted"}`}>{snapshotMessage}</p>
         )}
       </div>
     </Card>

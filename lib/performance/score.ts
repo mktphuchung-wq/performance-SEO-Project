@@ -21,6 +21,13 @@ export interface UrlScoreInput {
   previousClicks: number | null;
   currentImpressions: number | null;
   previousImpressions: number | null;
+  /**
+   * What the current period is actually graded against — a robust baseline over
+   * several past periods, with anomalous ones left out. Null when no history is
+   * available, which falls back to the raw previous period.
+   */
+  baselineClicks?: number | null;
+  baselineImpressions?: number | null;
 }
 
 export interface UrlScoreResult {
@@ -33,6 +40,9 @@ export interface UrlScoreResult {
   score: number | null;
   /** Relative influence on the aggregate, not a measurement. 0 means "no pull", which is meaningful. */
   weight: number;
+  /** The figures the ratios were taken against, so a score can be explained. */
+  baselineClicks: number | null;
+  baselineImpressions: number | null;
 }
 
 const NOT_SCORED: Omit<UrlScoreResult, "state"> = {
@@ -42,6 +52,8 @@ const NOT_SCORED: Omit<UrlScoreResult, "state"> = {
   impressionScore: null,
   score: null,
   weight: 0,
+  baselineClicks: null,
+  baselineImpressions: null,
 };
 
 /**
@@ -87,6 +99,48 @@ function clampScore(logRatio: number, sensitivity: number): number {
 }
 
 /**
+ * One number to grade the current period against, out of several past periods.
+ *
+ * A single preceding period is a sample of one, so anything unusual about it —
+ * a campaign, a viral week, a tracking gap — became the standard the next period
+ * was held to. Reverting to normal after an unusual high scored as collapse, and
+ * because 3M and 6M windows are rolling, that month kept poisoning the comparison
+ * for months after it was over.
+ *
+ * Winsorizing before the mean rather than taking the median outright: at the
+ * small sample counts this runs on (2 or 3 periods is typical) a median is barely
+ * more robust than an average, but clamping each sample to a band around the
+ * median keeps an extreme one from carrying its full magnitude in.
+ *
+ * The centre is the *lower* of the two middle values on an even count, not their
+ * average. Averaging them lets an outlier pull the very centre it is about to be
+ * clamped against — with two samples, [5000, 100] centres on 2550, and 5000 sits
+ * comfortably inside the band around it. The lower median leans the baseline
+ * slightly low, which errs towards crediting people rather than penalising them.
+ *
+ * Returns null with no samples so the caller can fall back to the previous
+ * period, and the lone sample unchanged with one — which is what makes a
+ * lookback of 1 identical to the behaviour this replaced.
+ */
+export function robustBaseline(samples: Array<number | null>, winsorizeMultiple: number): number | null {
+  const values = samples.filter((value): value is number => value !== null && Number.isFinite(value));
+  if (values.length === 0) return null;
+  if (values.length === 1) return values[0];
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const center = sorted[Math.floor((sorted.length - 1) / 2)];
+
+  // A median of 0 gives no band to clamp against; the plain mean is already
+  // bounded by the fact that every sample is near zero.
+  if (center <= 0) return values.reduce((sum, value) => sum + value, 0) / values.length;
+
+  const lower = center / winsorizeMultiple;
+  const upper = center * winsorizeMultiple;
+  const clamped = values.map((value) => Math.max(lower, Math.min(upper, value)));
+  return clamped.reduce((sum, value) => sum + value, 0) / clamped.length;
+}
+
+/**
  * Score one URL for one range. Pure — the repository layer joins the inputs.
  *
  * "excluded" and "no_data" produce the same outcome (not counted); they differ
@@ -105,21 +159,39 @@ export function computeUrlScore(input: UrlScoreInput, settings: KpiSettings): Ur
   const targetGrowthPct = settings.targetGrowthPct[input.projectType] ?? settings.targetGrowthPct.growth;
   const sensitivity = sensitivityFor(targetGrowthPct);
 
-  const clickRatio = ratioOf(input.currentClicks, input.previousClicks, settings.smoothingConstant);
-  const impressionRatio = ratioOf(input.currentImpressions, input.previousImpressions, settings.smoothingConstant);
+  const baselineClicks = input.baselineClicks ?? input.previousClicks;
+  const baselineImpressions = input.baselineImpressions ?? input.previousImpressions;
+
+  const clickRatio = ratioOf(input.currentClicks, baselineClicks, settings.smoothingConstant);
+  const impressionRatio = ratioOf(input.currentImpressions, baselineImpressions, settings.smoothingConstant);
 
   const clickScore = clampScore(Math.log2(clickRatio), sensitivity);
   const impressionScore = clampScore(Math.log2(impressionRatio), sensitivity);
 
   const score = clickScore * settings.clickWeight + impressionScore * settings.impressionWeight;
 
-  // A null previous counts as 0 here too, which makes the weight of a URL with
-  // no history low by construction. That is the mechanism that keeps very new
-  // URLs from swinging a member's average — it replaces the grace period the
-  // earlier design needed, without needing a state or a configurable window.
-  const weight = (Number(input.previousImpressions ?? 0) + Number(input.currentImpressions ?? 0)) / 2;
+  // Weighted off the same baseline the score was graded against, not the raw
+  // previous period. Otherwise an anomalous month inflates the weight of the very
+  // URL its own anomaly just mis-scored, and the bad score pulls harder on the
+  // member's average than an honest one would.
+  //
+  // A null baseline counts as 0 here, which makes the weight of a URL with no
+  // history low by construction. That is the mechanism that keeps very new URLs
+  // from swinging a member's average — it replaces the grace period the earlier
+  // design needed, without needing a state or a configurable window.
+  const weight = (Number(baselineImpressions ?? 0) + Number(input.currentImpressions ?? 0)) / 2;
 
-  return { state: "normal", clickRatio, impressionRatio, clickScore, impressionScore, score, weight };
+  return {
+    state: "normal",
+    clickRatio,
+    impressionRatio,
+    clickScore,
+    impressionScore,
+    score,
+    weight,
+    baselineClicks,
+    baselineImpressions,
+  };
 }
 
 export interface ScoreAggregate {

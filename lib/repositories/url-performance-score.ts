@@ -46,6 +46,8 @@ export interface UpsertUrlScoreInput {
   startDate: string;
   endDate: string;
   projectType: string;
+  /** How many past periods went into the baseline. 0 means the legacy previous period was used. */
+  baselineSampleCount?: number;
   result: UrlScoreResult;
 }
 
@@ -55,8 +57,9 @@ export async function upsertUrlPerformanceScore(input: UpsertUrlScoreInput): Pro
     `insert into public.url_performance_score
        (content_url_id, range_key, start_date, end_date, project_type, score_state,
         click_ratio, impression_ratio,
-        click_score, impression_score, score, weight, refreshed_at, updated_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())
+        click_score, impression_score, score, weight,
+        baseline_clicks, baseline_impressions, baseline_sample_count, refreshed_at, updated_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now(), now())
      on conflict (content_url_id, range_key) do update set
        start_date = excluded.start_date,
        end_date = excluded.end_date,
@@ -68,6 +71,9 @@ export async function upsertUrlPerformanceScore(input: UpsertUrlScoreInput): Pro
        impression_score = excluded.impression_score,
        score = excluded.score,
        weight = excluded.weight,
+       baseline_clicks = excluded.baseline_clicks,
+       baseline_impressions = excluded.baseline_impressions,
+       baseline_sample_count = excluded.baseline_sample_count,
        refreshed_at = now(),
        updated_at = now()`,
     [
@@ -83,6 +89,9 @@ export async function upsertUrlPerformanceScore(input: UpsertUrlScoreInput): Pro
       r.impressionScore,
       r.score,
       r.weight,
+      r.baselineClicks,
+      r.baselineImpressions,
+      input.baselineSampleCount ?? 0,
     ],
   );
 }
@@ -102,23 +111,32 @@ export async function bulkUpsertUrlPerformanceScores(inputs: UpsertUrlScoreInput
     impression_score: input.result.impressionScore,
     score: input.result.score,
     weight: input.result.weight,
+    baseline_clicks: input.result.baselineClicks,
+    baseline_impressions: input.result.baselineImpressions,
+    baseline_sample_count: input.baselineSampleCount ?? 0,
   }));
   const sql = `insert into public.url_performance_score
       (content_url_id, range_key, start_date, end_date, project_type, score_state,
-       click_ratio, impression_ratio, click_score, impression_score, score, weight, refreshed_at, updated_at)
+       click_ratio, impression_ratio, click_score, impression_score, score, weight,
+       baseline_clicks, baseline_impressions, baseline_sample_count, refreshed_at, updated_at)
     select x.content_url_id, x.range_key, x.start_date, x.end_date, x.project_type, x.score_state,
-           x.click_ratio, x.impression_ratio, x.click_score, x.impression_score, x.score, x.weight, now(), now()
+           x.click_ratio, x.impression_ratio, x.click_score, x.impression_score, x.score, x.weight,
+           x.baseline_clicks, x.baseline_impressions, x.baseline_sample_count, now(), now()
     from jsonb_to_recordset($1::jsonb) as x(
       content_url_id uuid, range_key text, start_date date, end_date date, project_type text,
       score_state text, click_ratio numeric, impression_ratio numeric, click_score numeric,
-      impression_score numeric, score numeric, weight numeric
+      impression_score numeric, score numeric, weight numeric,
+      baseline_clicks numeric, baseline_impressions numeric, baseline_sample_count integer
     )
     on conflict (content_url_id, range_key) do update set
       start_date = excluded.start_date, end_date = excluded.end_date,
       project_type = excluded.project_type, score_state = excluded.score_state,
       click_ratio = excluded.click_ratio, impression_ratio = excluded.impression_ratio,
       click_score = excluded.click_score, impression_score = excluded.impression_score,
-      score = excluded.score, weight = excluded.weight, refreshed_at = now(), updated_at = now()`;
+      score = excluded.score, weight = excluded.weight,
+      baseline_clicks = excluded.baseline_clicks, baseline_impressions = excluded.baseline_impressions,
+      baseline_sample_count = excluded.baseline_sample_count,
+      refreshed_at = now(), updated_at = now()`;
   const chunkSize = getSyncBulkChunkSize();
   for (let offset = 0; offset < inputs.length; offset += chunkSize) {
     const params = [JSON.stringify(toPayload(inputs.slice(offset, offset + chunkSize)))];
@@ -147,6 +165,14 @@ export interface UrlScoreDisplayRow {
   impressions: number | null;
   previous_impressions: number | null;
   weight: number;
+  /**
+   * What the score was actually graded against. Differs from previous_clicks
+   * whenever monthly history was available — that gap is the explanation when a
+   * URL shows a steep raw decline but does not score like one.
+   */
+  baseline_clicks: number | null;
+  baseline_impressions: number | null;
+  baseline_sample_count: number;
   kpi_excluded: boolean;
   kpi_excluded_reason: string | null;
 }
@@ -180,6 +206,7 @@ export async function listUrlScores(
     `select s.content_url_id, c.url, c.project, c.member_name,
             s.project_type, s.score_state, s.score, s.click_score, s.impression_score,
             s.click_ratio, s.impression_ratio, s.weight,
+            s.baseline_clicks, s.baseline_impressions, s.baseline_sample_count,
             p.click_growth_pct, p.impression_growth_pct,
             p.clicks, p.previous_clicks, p.impressions, p.previous_impressions,
             c.kpi_excluded, c.kpi_excluded_reason

@@ -15,10 +15,14 @@ import {
 } from "@/lib/google";
 import { classifyGoogleApiError, isWideQueryUnsupported } from "@/lib/google-errors";
 import { computeGrowth, type PeriodMetrics } from "@/lib/performance/growth";
-import { aggregateScore, computeUrlScore } from "@/lib/performance/score";
+import { aggregateScore, computeUrlScore, robustBaseline } from "@/lib/performance/score";
+import {
+  getMonthlyHistoryForUrls,
+  isBaselineEligible,
+} from "@/lib/repositories/content-url-monthly-metrics";
 import { getUrlAttributionForRange, type UrlAttributionRow } from "@/lib/repositories/content-url-works";
 import { listActiveContentUrls, listContentUrlsByIds, type ContentUrl } from "@/lib/repositories/content-urls";
-import { getKpiSettings } from "@/lib/repositories/kpi-settings";
+import { getBaselineSettings, getKpiSettings } from "@/lib/repositories/kpi-settings";
 import { upsertMemberScore, upsertProjectScore } from "@/lib/repositories/kpi-score-rollups";
 import {
   bulkStagePerformanceCache,
@@ -42,7 +46,7 @@ import {
 } from "@/lib/repositories/refresh-runs";
 import { upsertMemberRollup, upsertProjectRollup } from "@/lib/repositories/rollups";
 import { bulkUpsertUrlPerformanceScores, getScoringInputRowsForRange } from "@/lib/repositories/url-performance-score";
-import { computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
+import { baselineWindows, computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
 import { normalizeForGscMatch } from "@/lib/sync/normalize-url";
 
 export async function startRefresh(triggeredBy: string | null, rangeKey: RangeKey): Promise<RefreshRun> {
@@ -407,27 +411,92 @@ export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: stri
   }
 }
 
+interface UrlBaseline {
+  clicks: number | null;
+  impressions: number | null;
+  sampleCount: number;
+}
+
+/**
+ * What each URL's current period should be graded against, in place of whatever
+ * the single window before it happened to be.
+ *
+ * A window only yields a sample when every calendar month in it is present, is
+ * "ok", and is not flagged as anomalous — a partial sum would read as a drop the
+ * URL never had, which is the same class of mistake this whole mechanism exists
+ * to stop. Falls back to an empty map when no history is stored yet, leaving the
+ * legacy previous-period behaviour untouched.
+ */
+async function baselineIndex(
+  rangeKey: RangeKey,
+  startDate: string,
+  contentUrlIds: string[],
+  db?: DbExecutor,
+): Promise<Map<string, UrlBaseline>> {
+  const settings = await getBaselineSettings(db);
+  const windows = baselineWindows(rangeKey, startDate, settings.lookbackPeriods);
+  if (windows.length === 0 || contentUrlIds.length === 0) return new Map();
+
+  const oldest = windows[windows.length - 1].startDate;
+  const monthsBack = Math.round((Date.parse(`${startDate}T00:00:00Z`) - Date.parse(`${oldest}T00:00:00Z`)) / 86_400_000 / 28) + 1;
+  const history = await getMonthlyHistoryForUrls(contentUrlIds, startDate, monthsBack, db);
+
+  const index = new Map<string, UrlBaseline>();
+  for (const [contentUrlId, rows] of history) {
+    const usable = new Map(rows.filter(isBaselineEligible).map((row) => [row.period_start, row]));
+    const clickSamples: Array<number | null> = [];
+    const impressionSamples: Array<number | null> = [];
+    for (const window of windows) {
+      const months = monthStartsIn(window.startDate, window.months).map((month) => usable.get(month));
+      if (months.some((month) => !month)) continue;
+      clickSamples.push(months.reduce((sum, month) => sum + Number(month!.clicks ?? 0), 0));
+      impressionSamples.push(months.reduce((sum, month) => sum + Number(month!.impressions ?? 0), 0));
+    }
+    if (clickSamples.length === 0) continue;
+    index.set(contentUrlId, {
+      clicks: robustBaseline(clickSamples, settings.winsorizeMultiple),
+      impressions: robustBaseline(impressionSamples, settings.winsorizeMultiple),
+      sampleCount: clickSamples.length,
+    });
+  }
+  return index;
+}
+
+function monthStartsIn(startMonth: string, months: number): string[] {
+  const start = new Date(`${startMonth}T00:00:00.000Z`);
+  return Array.from({ length: months }, (_, offset) =>
+    new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + offset, 1)).toISOString().slice(0, 10));
+}
+
 export async function computeAndStoreScores(rangeKey: RangeKey, startDate: string, endDate: string, db?: DbExecutor): Promise<void> {
   const settings = await getKpiSettings(db);
   const rows = await getScoringInputRowsForRange(rangeKey, db);
-  const scored = rows.map((row) => ({
-    row,
-    result: computeUrlScore({
-      projectType: row.project_type,
-      dataStatus: row.data_status,
-      kpiExcluded: row.kpi_excluded,
-      currentClicks: row.current_clicks,
-      previousClicks: row.previous_clicks,
-      currentImpressions: row.current_impressions,
-      previousImpressions: row.previous_impressions,
-    }, settings),
-  }));
-  await bulkUpsertUrlPerformanceScores(scored.map(({ row, result }) => ({
+  const baselines = await baselineIndex(rangeKey, startDate, rows.map((row) => row.content_url_id), db);
+  const scored = rows.map((row) => {
+    const baseline = baselines.get(row.content_url_id);
+    return {
+      row,
+      sampleCount: baseline?.sampleCount ?? 0,
+      result: computeUrlScore({
+        projectType: row.project_type,
+        dataStatus: row.data_status,
+        kpiExcluded: row.kpi_excluded,
+        currentClicks: row.current_clicks,
+        previousClicks: row.previous_clicks,
+        currentImpressions: row.current_impressions,
+        previousImpressions: row.previous_impressions,
+        baselineClicks: baseline?.clicks ?? null,
+        baselineImpressions: baseline?.impressions ?? null,
+      }, settings),
+    };
+  });
+  await bulkUpsertUrlPerformanceScores(scored.map(({ row, result, sampleCount }) => ({
     contentUrlId: row.content_url_id,
     rangeKey,
     startDate,
     endDate,
     projectType: row.project_type,
+    baselineSampleCount: sampleCount,
     result,
   })), db);
   const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));

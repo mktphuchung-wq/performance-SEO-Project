@@ -54,11 +54,13 @@ export function PerformanceTable({
   rows,
   showMember = false,
   onToggleKpiExclusion,
+  onInspectHistory,
 }: {
   rows: PerformanceTableRow[];
   showMember?: boolean;
   /** Supplied only by the admin view — its presence is what adds the KPI column. */
   onToggleKpiExclusion?: (row: PerformanceTableRow) => void;
+  onInspectHistory?: (row: PerformanceTableRow) => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -170,6 +172,15 @@ export function PerformanceTable({
                       <span className="max-w-[160px] text-xs leading-4 text-ink-subtle">
                         {row.kpi_excluded_reason}
                       </span>
+                    )}
+                    {onInspectHistory && (
+                      <button
+                        onClick={() => onInspectHistory(row)}
+                        className="text-xs font-medium text-accent hover:underline"
+                        title="Monthly history and anomaly flags used as this URL's baseline"
+                      >
+                        Baseline…
+                      </button>
                     )}
                   </div>
                 </td>

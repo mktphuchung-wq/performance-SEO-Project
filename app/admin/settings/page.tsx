@@ -26,6 +26,11 @@ interface KpiSettingsRow {
   click_weight: number;
   impression_weight: number;
   url_weight_cap_pct: number;
+  baseline_lookback_periods: number;
+  baseline_winsorize_multiple: number;
+  anomaly_zscore_threshold: number;
+  anomaly_ratio_threshold: number;
+  anomaly_min_history_months: number;
 }
 
 const KPI_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string; step: string }> = [
@@ -47,6 +52,41 @@ const KPI_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string
   { key: "impression_weight", label: "Impression weight", hint: "Must add up to 1 with click weight", step: "0.05" },
   { key: "url_weight_cap_pct", label: "URL weight cap (%)", hint: "Max share one URL can take", step: "1" },
 ];
+
+const BASELINE_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string; step: string }> = [
+  {
+    key: "baseline_lookback_periods",
+    label: "Baseline periods",
+    hint: "How many past periods the score is graded against. 1 = the single previous period, as before",
+    step: "1",
+  },
+  {
+    key: "baseline_winsorize_multiple",
+    label: "Winsorize multiple",
+    hint: "How far a single period may sit from the median before it is pulled in",
+    step: "0.5",
+  },
+  {
+    key: "anomaly_zscore_threshold",
+    label: "Anomaly z-score",
+    hint: "Deviations from a URL's own median before a month is flagged. Lower = more sensitive",
+    step: "0.5",
+  },
+  {
+    key: "anomaly_ratio_threshold",
+    label: "Anomaly fold-change",
+    hint: "A flagged month must also be this many times its median — keeps quiet URLs from tripping",
+    step: "0.5",
+  },
+  {
+    key: "anomaly_min_history_months",
+    label: "Min history (months)",
+    hint: "Months of history required before any month can be judged anomalous",
+    step: "1",
+  },
+];
+
+const SETTINGS_FIELDS = [...KPI_FIELDS, ...BASELINE_FIELDS];
 
 interface GscSite {
   siteUrl: string;
@@ -190,7 +230,7 @@ export default function AdminSettingsPage() {
         // period weights now, and posting a stale copy of those back would
         // silently undo a change made in the weights panel above.
         body: JSON.stringify(
-          Object.fromEntries(KPI_FIELDS.map((field) => [field.key, Number(kpiDraft[field.key])])),
+          Object.fromEntries(SETTINGS_FIELDS.map((field) => [field.key, Number(kpiDraft[field.key])])),
         ),
       });
       const data = await res.json();
@@ -361,6 +401,29 @@ export default function AdminSettingsPage() {
                     <span className="text-xs text-ink-subtle">{field.hint}</span>
                   </Field>
                 ))}
+              </div>
+              <div className="border-t border-line pt-4">
+                <h3 className="text-[13px] font-medium text-ink">Baseline &amp; anomalies</h3>
+                <p className="mb-3 text-xs text-ink-subtle">
+                  What the current period is compared against. With a single baseline period, a month that spiked
+                  becomes the whole yardstick for the month after it, so returning to normal scores as a collapse.
+                  Raising the lookback grades against several past periods instead, and months that stand too far
+                  out from a URL&apos;s own history are left out of the comparison altogether.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {BASELINE_FIELDS.map((field) => (
+                    <Field key={field.key} label={field.label}>
+                      <input
+                        type="number"
+                        step={field.step}
+                        value={kpiDraft[field.key] ?? ""}
+                        onChange={(e) => setKpiDraft((draft) => ({ ...draft, [field.key]: e.target.value }))}
+                        className={inputClass}
+                      />
+                      <span className="text-xs text-ink-subtle">{field.hint}</span>
+                    </Field>
+                  ))}
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button onClick={saveKpiSettings} disabled={kpiSaving}>

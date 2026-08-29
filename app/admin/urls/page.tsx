@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BaselineHistoryPanel } from "@/components/BaselineHistoryPanel";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
 import { Card, CardHeader, Field, PageHeader, inputClass } from "@/components/ui";
@@ -22,6 +23,7 @@ export default function AdminUrlsPage() {
 
   const [dataVersion, setDataVersion] = useState(0);
   const [kpiError, setKpiError] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState<PerformanceTableRow | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams({ range });
@@ -69,6 +71,14 @@ export default function AdminUrlsPage() {
         description="Every active URL from the sheet with its cached Search Console metrics."
         action={<RangeSwitcher value={range} onChange={setRange} />}
       />
+
+      {inspecting && (
+        <BaselineHistoryPanel
+          contentUrlId={inspecting.content_url_id}
+          url={inspecting.url}
+          onClose={() => setInspecting(null)}
+        />
+      )}
 
       <Card>
         <CardHeader
@@ -125,7 +135,12 @@ export default function AdminUrlsPage() {
         </div>
 
         {kpiError && <p className="px-5 pt-3 text-[13px] text-negative">{kpiError}</p>}
-        <PerformanceTable rows={rows} showMember onToggleKpiExclusion={toggleKpiExclusion} />
+        <PerformanceTable
+          rows={rows}
+          showMember
+          onToggleKpiExclusion={toggleKpiExclusion}
+          onInspectHistory={setInspecting}
+        />
         <div className="space-y-1 border-t border-line px-5 py-3 text-[13px] text-ink-muted">
           <p>
             Clicks, impressions and deltas always come from the <strong>{RANGE_LABELS[range] ?? range}</strong> cache —

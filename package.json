@@ -13,6 +13,7 @@
     "verify:work-events": "node scripts/verify-work-events.mjs",
     "verify:work-events-db": "node scripts/verify-work-events-db.mjs",
     "verify:review-autosync": "node scripts/verify-review-autosync.mjs",
+    "verify:anomaly-baseline": "node scripts/verify-anomaly-baseline.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

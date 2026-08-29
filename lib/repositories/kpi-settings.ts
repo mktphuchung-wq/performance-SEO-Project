@@ -1,4 +1,5 @@
 import { query, queryOne, type DbExecutor } from "@/lib/db";
+import type { AnomalySettings } from "@/lib/performance/anomaly";
 import type { KpiPeriodWeights } from "@/lib/performance/composite-score";
 import type { KpiSettings } from "@/lib/performance/score";
 
@@ -14,6 +15,11 @@ export interface KpiSettingsRow {
   kpi_weight_3m: number;
   kpi_weight_6m: number;
   trend_tolerance: number;
+  baseline_lookback_periods: number;
+  baseline_winsorize_multiple: number;
+  anomaly_zscore_threshold: number;
+  anomaly_ratio_threshold: number;
+  anomaly_min_history_months: number;
 }
 
 /**
@@ -33,6 +39,11 @@ export const KPI_SETTINGS_COLUMNS = [
   "kpi_weight_3m",
   "kpi_weight_6m",
   "trend_tolerance",
+  "baseline_lookback_periods",
+  "baseline_winsorize_multiple",
+  "anomaly_zscore_threshold",
+  "anomaly_ratio_threshold",
+  "anomaly_min_history_months",
 ] as const;
 
 export type KpiSettingsColumn = (typeof KPI_SETTINGS_COLUMNS)[number];
@@ -49,6 +60,30 @@ export async function getKpiSettings(db?: DbExecutor): Promise<KpiSettings> {
     clickWeight: Number(row.click_weight),
     impressionWeight: Number(row.impression_weight),
     urlWeightCapPct: Number(row.url_weight_cap_pct),
+  };
+}
+
+export interface BaselineSettings {
+  lookbackPeriods: number;
+  winsorizeMultiple: number;
+  anomaly: AnomalySettings;
+}
+
+/**
+ * How far back a baseline reaches and when a month is too odd to be part of one.
+ * Separate from `getKpiSettings()` for the same reason the composite settings
+ * are: that one grades a URL, this one decides what it is graded against.
+ */
+export async function getBaselineSettings(db?: DbExecutor): Promise<BaselineSettings> {
+  const row = await getKpiSettingsRow(db);
+  return {
+    lookbackPeriods: Number(row.baseline_lookback_periods),
+    winsorizeMultiple: Number(row.baseline_winsorize_multiple),
+    anomaly: {
+      zscoreThreshold: Number(row.anomaly_zscore_threshold),
+      ratioThreshold: Number(row.anomaly_ratio_threshold),
+      minHistoryMonths: Number(row.anomaly_min_history_months),
+    },
   };
 }
 

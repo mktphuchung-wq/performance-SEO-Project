@@ -46,6 +46,26 @@ function validate(merged: KpiSettingsRow): string | null {
   if (!(merged.trend_tolerance >= 0 && merged.trend_tolerance <= 50)) {
     return "trend_tolerance must be between 0 and 50";
   }
+  if (!Number.isInteger(merged.baseline_lookback_periods)
+    || merged.baseline_lookback_periods < 1 || merged.baseline_lookback_periods > 12) {
+    return "baseline_lookback_periods must be a whole number between 1 and 12";
+  }
+  // At 1 every sample collapses onto the median, which would throw away the
+  // variation the baseline is supposed to average over.
+  if (!(merged.baseline_winsorize_multiple > 1)) {
+    return "baseline_winsorize_multiple must be greater than 1";
+  }
+  if (!(merged.anomaly_zscore_threshold > 0)) {
+    return "anomaly_zscore_threshold must be greater than 0";
+  }
+  // At or below 1 every month is "at least 1x its own median", so every month
+  // would be an anomaly.
+  if (!(merged.anomaly_ratio_threshold > 1)) {
+    return "anomaly_ratio_threshold must be greater than 1";
+  }
+  if (!Number.isInteger(merged.anomaly_min_history_months) || merged.anomaly_min_history_months < 2) {
+    return "anomaly_min_history_months must be a whole number of at least 2";
+  }
   return null;
 }
 
