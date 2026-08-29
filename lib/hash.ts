@@ -26,6 +26,7 @@ export interface ContentHashInput {
   workType: string;
   gscProperty: string | null;
   publishedAt: string | null;
+  firstWorkedAt: string | null;
 }
 
 export function computeContentHash(input: ContentHashInput): string {
@@ -37,6 +38,7 @@ export function computeContentHash(input: ContentHashInput): string {
     input.workType,
     input.gscProperty,
     input.publishedAt,
+    input.firstWorkedAt,
   ]);
   return createHash("sha256").update(payload).digest("hex");
 }
@@ -64,10 +66,17 @@ export interface WorkContentHashInput {
   memberEmail: string | null;
   workKind: string;
   sourceRowNumber: number | null;
+  taskTitle: string;
 }
 
 /** The mutable half of a work event — what a sync has to write back when it changes. */
 export function computeWorkContentHash(input: WorkContentHashInput): string {
-  const payload = JSON.stringify([input.project, input.memberEmail, input.workKind, input.sourceRowNumber]);
+  const payload = JSON.stringify([
+    input.project,
+    input.memberEmail,
+    input.workKind,
+    input.sourceRowNumber,
+    input.taskTitle,
+  ]);
   return createHash("sha256").update(payload).digest("hex");
 }

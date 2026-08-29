@@ -40,6 +40,8 @@ export interface ContentReviewBatch {
   updated_at: string;
 }
 
+export type ContentReviewTaskSource = "sync" | "manual" | "paste";
+
 export interface ContentReviewTask {
   id: string;
   batch_id: string;
@@ -50,6 +52,10 @@ export interface ContentReviewTask {
   urls: string;
   note: string;
   source_row_number: number | null;
+  /** The work event this task was generated from; null for a hand-typed task. */
+  content_url_work_id: string | null;
+  source: ContentReviewTaskSource;
+  dismissed_at: string | null;
   quality_pct: number | null;
   created_at: string;
   updated_at: string;
@@ -281,7 +287,7 @@ export async function updateBatchSettings(
 export async function listTasksByBatch(batchId: string): Promise<ContentReviewTask[]> {
   return query<ContentReviewTask>(
     `select * from public.content_review_tasks
-     where batch_id = $1
+     where batch_id = $1 and dismissed_at is null
      order by worked_at nulls last, source_row_number nulls last, created_at`,
     [batchId],
   );
@@ -291,7 +297,7 @@ export async function listScoresByBatch(batchId: string): Promise<ContentReviewS
   return query<ContentReviewScore>(
     `select s.* from public.content_review_scores s
      join public.content_review_tasks t on t.id = s.task_id
-     where t.batch_id = $1`,
+     where t.batch_id = $1 and t.dismissed_at is null`,
     [batchId],
   );
 }
@@ -306,9 +312,13 @@ export interface NewTaskInput {
 }
 
 /**
- * Appends pasted rows. Nothing is deduplicated: the same title can legitimately
- * appear twice in a month, and dropping the second one would silently cost the
- * member a task in the count.
+ * Appends hand-typed rows. Nothing is deduplicated: the same title can
+ * legitimately appear twice in a month, and dropping the second one would
+ * silently cost the member a task in the count.
+ *
+ * These always carry source 'manual' and no work id — a task generated from the
+ * Sheet comes from syncTasksFromWorks instead, and the two must stay
+ * distinguishable so a hand-typed row is never overwritten or removed by a sync.
  */
 export async function insertTasks(batchId: string, tasks: NewTaskInput[]): Promise<number> {
   if (tasks.length === 0) return 0;
@@ -317,17 +327,82 @@ export async function insertTasks(batchId: string, tasks: NewTaskInput[]): Promi
   const tuples = tasks.map((task) => {
     values.push(batchId, task.workedAt, task.project, task.workType, task.taskTitle, task.urls, task.sourceRowNumber);
     const base = values.length - 7;
-    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, 'manual')`;
   });
 
   const rows = await query<{ id: string }>(
     `insert into public.content_review_tasks
-       (batch_id, worked_at, project, work_type, task_title, urls, source_row_number)
+       (batch_id, worked_at, project, work_type, task_title, urls, source_row_number, source)
      values ${tuples.join(", ")}
      returning id`,
     values,
   );
   return rows.length;
+}
+
+/**
+ * Fills a month from the work events the Sheet sync already stored, so a
+ * reviewer opens a month and finds it populated instead of pasting a clipboard
+ * block into it.
+ *
+ * The generator is idempotent and safe to run on every load:
+ *  - a work event maps to exactly one task per batch (the partial unique index),
+ *    so running it twice updates rather than duplicates;
+ *  - a task the reviewer dismissed keeps its dismissed_at, so it does not come
+ *    back on the next load;
+ *  - hand-typed tasks carry no work id and are never touched;
+ *  - a task whose work event left the Sheet is removed only while it is
+ *    ungraded. Once it carries a grade it stays: it is the record of how a
+ *    published month was scored.
+ *
+ * The title is the Sheet's Task column when it has one, falling back to the URL
+ * — a row is never listed nameless.
+ */
+export async function syncTasksFromWorks(
+  batchId: string,
+  memberName: string,
+  month: string,
+): Promise<{ written: number; removed: number }> {
+  const written = await query<{ id: string }>(
+    `insert into public.content_review_tasks
+       (batch_id, worked_at, project, work_type, task_title, urls, source_row_number, content_url_work_id, source)
+     select $1, w.worked_at, w.project, w.work_type,
+            coalesce(nullif(w.task_title, ''), c.url), c.url, w.source_row_number, w.id, 'sync'
+       from public.content_url_works w
+       join public.content_urls c on c.id = w.content_url_id
+      where w.is_active = true
+        and w.member_name = $2
+        and w.worked_at >= $3::date
+        and w.worked_at < ($3::date + interval '1 month')
+     on conflict (batch_id, content_url_work_id) where content_url_work_id is not null
+     do update set
+       worked_at = excluded.worked_at,
+       project = excluded.project,
+       work_type = excluded.work_type,
+       task_title = excluded.task_title,
+       urls = excluded.urls,
+       source_row_number = excluded.source_row_number,
+       updated_at = now()
+     returning id`,
+    [batchId, memberName, month],
+  );
+
+  const removed = await query<{ id: string }>(
+    `delete from public.content_review_tasks t
+      where t.batch_id = $1
+        and t.source = 'sync'
+        and t.content_url_work_id is not null
+        and not exists (select 1 from public.content_review_scores s where s.task_id = t.id)
+        and not exists (
+          select 1 from public.content_url_works w
+           where w.id = t.content_url_work_id and w.is_active = true and w.member_name = $2
+             and w.worked_at >= $3::date and w.worked_at < ($3::date + interval '1 month')
+        )
+     returning t.id`,
+    [batchId, memberName, month],
+  );
+
+  return { written: written.length, removed: removed.length };
 }
 
 export async function getTaskById(id: string): Promise<ContentReviewTask | null> {
@@ -346,8 +421,23 @@ export async function updateTaskNote(id: string, note: string): Promise<ContentR
   );
 }
 
+/**
+ * Removes a task from the month.
+ *
+ * A generated task is dismissed rather than deleted: deleting it would only last
+ * until the next load, when the generator would find its work event again and
+ * put it straight back. Dismissed rows are invisible to every read and to the
+ * batch arithmetic, so the effect is the same and it survives. A hand-typed task
+ * has nothing to regenerate it, so it really is deleted.
+ */
 export async function deleteTask(id: string): Promise<void> {
-  await query("delete from public.content_review_tasks where id = $1", [id]);
+  await query(
+    `update public.content_review_tasks
+        set dismissed_at = now(), updated_at = now()
+      where id = $1 and content_url_work_id is not null and dismissed_at is null`,
+    [id],
+  );
+  await query("delete from public.content_review_tasks where id = $1 and content_url_work_id is null", [id]);
 }
 
 // -------------------------------------------------------------------- scores
@@ -392,6 +482,9 @@ export async function upsertScore(taskId: string, criteriaId: string, score: num
  *    0% nor a free 100%;
  *  - content_score needs both halves; with either missing it stays null instead
  *    of scoring the missing half as zero.
+ *
+ * Dismissed tasks are excluded throughout: a row the reviewer took out of the
+ * month must not count toward its task_count or drag on its average.
  */
 export async function recomputeBatch(batchId: string): Promise<ContentReviewBatch | null> {
   return queryOne<ContentReviewBatch>(
@@ -401,7 +494,7 @@ export async function recomputeBatch(batchId: string): Promise<ContentReviewBatc
        from public.content_review_tasks t
        left join public.content_review_scores s on s.task_id = t.id
        left join public.content_review_criteria c on c.id = s.criteria_id
-       where t.batch_id = $1
+       where t.batch_id = $1 and t.dismissed_at is null
        group by t.id
      ),
      updated as (

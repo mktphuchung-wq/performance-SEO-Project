@@ -14,6 +14,8 @@ export interface ContentUrlWork {
   work_type: string;
   work_kind: WorkKind;
   worked_at: string | null;
+  /** The Sheet's Task column, or '' when the Sheet has no such column. */
+  task_title: string;
   source_row_number: number | null;
   is_active: boolean;
 }
@@ -28,6 +30,7 @@ export interface BulkUpsertContentUrlWorkInput {
   workType: string;
   workKind: WorkKind;
   workedAt: string | null;
+  taskTitle: string;
   sourceRowNumber: number | null;
 }
 
@@ -56,12 +59,12 @@ export async function bulkUpsertContentUrlWorks(rows: BulkUpsertContentUrlWorkIn
   if (rows.length === 0) return;
   const sql = `insert into public.content_url_works
        (work_hash, content_hash, url_hash, content_url_id, project, member_name, member_email,
-        work_type, work_kind, worked_at, source_row_number, is_active, last_seen_at, updated_at)
+        work_type, work_kind, worked_at, task_title, source_row_number, is_active, last_seen_at, updated_at)
      select x.work_hash, x.content_hash, x.url_hash, c.id, x.project, x.member_name, x.member_email,
-            x.work_type, x.work_kind, x.worked_at, x.source_row_number, true, now(), now()
+            x.work_type, x.work_kind, x.worked_at, x.task_title, x.source_row_number, true, now(), now()
      from jsonb_to_recordset($1::jsonb) as x(
        work_hash text, content_hash text, url_hash text, project text, member_name text, member_email text,
-       work_type text, work_kind text, worked_at date, source_row_number integer
+       work_type text, work_kind text, worked_at date, task_title text, source_row_number integer
      )
      join public.content_urls c on c.url_hash = x.url_hash
      on conflict (work_hash) do update set
@@ -70,6 +73,7 @@ export async function bulkUpsertContentUrlWorks(rows: BulkUpsertContentUrlWorkIn
        project = excluded.project,
        member_email = excluded.member_email,
        work_kind = excluded.work_kind,
+       task_title = excluded.task_title,
        source_row_number = excluded.source_row_number,
        is_active = true,
        last_seen_at = now(),
@@ -86,6 +90,7 @@ export async function bulkUpsertContentUrlWorks(rows: BulkUpsertContentUrlWorkIn
       work_type: row.workType,
       work_kind: row.workKind,
       worked_at: row.workedAt,
+      task_title: row.taskTitle,
       source_row_number: row.sourceRowNumber,
     }));
     await executorQuery(db, sql, [JSON.stringify(payload)]);

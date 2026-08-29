@@ -14,6 +14,12 @@ export interface ContentUrl {
   /** The most recent work event on this URL. "Who owns it now", not "when it went live". */
   worked_at: string | null;
   /**
+   * The earliest work event on this URL, of any kind. Display only — it says when
+   * the team started working on the URL, and never gates data the way
+   * published_at does.
+   */
+  first_worked_at: string | null;
+  /**
    * When a work event said this URL was created. Null when no such event exists,
    * which reads as "already live" — the only date allowed to gate GSC data.
    */
@@ -34,6 +40,7 @@ export interface UpsertContentUrlInput {
   workType: string;
   gscProperty: string | null;
   workedAt: string | null;
+  firstWorkedAt: string | null;
   publishedAt: string | null;
   sourceRowNumber: number | null;
 }
@@ -60,12 +67,13 @@ export async function bulkUpsertContentUrls(rows: BulkUpsertContentUrlInput[], d
     db,
     `insert into public.content_urls
        (url_hash, content_hash, project, url, member_name, member_email, work_type, gsc_property,
-        worked_at, published_at, source_row_number, is_active, last_seen_at, updated_at)
+        worked_at, first_worked_at, published_at, source_row_number, is_active, last_seen_at, updated_at)
      select x.url_hash, x.content_hash, x.project, x.url, x.member_name, x.member_email, x.work_type,
-            x.gsc_property, x.worked_at, x.published_at, x.source_row_number, true, now(), now()
+            x.gsc_property, x.worked_at, x.first_worked_at, x.published_at, x.source_row_number, true, now(), now()
      from jsonb_to_recordset($1::jsonb) as x(
        url_hash text, content_hash text, project text, url text, member_name text, member_email text,
-       work_type text, gsc_property text, worked_at date, published_at date, source_row_number integer
+       work_type text, gsc_property text, worked_at date, first_worked_at date, published_at date,
+       source_row_number integer
      )
      on conflict (url_hash) do update set
        content_hash = excluded.content_hash,
@@ -76,6 +84,7 @@ export async function bulkUpsertContentUrls(rows: BulkUpsertContentUrlInput[], d
        work_type = excluded.work_type,
        gsc_property = excluded.gsc_property,
        worked_at = excluded.worked_at,
+       first_worked_at = excluded.first_worked_at,
        published_at = excluded.published_at,
        source_row_number = excluded.source_row_number,
        is_active = true,
@@ -91,6 +100,7 @@ export async function bulkUpsertContentUrls(rows: BulkUpsertContentUrlInput[], d
       work_type: row.workType,
       gsc_property: row.gscProperty,
       worked_at: row.workedAt,
+      first_worked_at: row.firstWorkedAt,
       published_at: row.publishedAt,
       source_row_number: row.sourceRowNumber,
     })))],
@@ -100,8 +110,8 @@ export async function bulkUpsertContentUrls(rows: BulkUpsertContentUrlInput[], d
 export async function upsertContentUrl(input: UpsertContentUrlInput): Promise<{ id: string; inserted: boolean }> {
   const row = await queryOne<{ id: string; inserted: boolean }>(
     `insert into public.content_urls
-       (url_hash, project, url, member_name, member_email, work_type, gsc_property, worked_at, published_at, source_row_number, is_active, last_seen_at, updated_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, now(), now())
+       (url_hash, project, url, member_name, member_email, work_type, gsc_property, worked_at, first_worked_at, published_at, source_row_number, is_active, last_seen_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, now(), now())
      on conflict (url_hash) do update set
        project = excluded.project,
        url = excluded.url,
@@ -110,6 +120,7 @@ export async function upsertContentUrl(input: UpsertContentUrlInput): Promise<{ 
        work_type = excluded.work_type,
        gsc_property = excluded.gsc_property,
        worked_at = excluded.worked_at,
+       first_worked_at = excluded.first_worked_at,
        published_at = excluded.published_at,
        source_row_number = excluded.source_row_number,
        is_active = true,
@@ -125,6 +136,7 @@ export async function upsertContentUrl(input: UpsertContentUrlInput): Promise<{ 
       input.workType,
       input.gscProperty,
       input.workedAt,
+      input.firstWorkedAt,
       input.publishedAt,
       input.sourceRowNumber,
     ],

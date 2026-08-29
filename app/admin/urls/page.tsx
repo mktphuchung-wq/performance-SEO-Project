@@ -11,9 +11,14 @@ export default function AdminUrlsPage() {
   const [range, setRange] = useState<string>(DEFAULT_RANGE_KEY);
   const [project, setProject] = useState("");
   const [member, setMember] = useState("");
+  // Empty means "the whole range". A month narrows which URLs are listed, never
+  // which figures they carry.
+  const [month, setMonth] = useState("");
+  const [workedOnly, setWorkedOnly] = useState(false);
   const [rows, setRows] = useState<PerformanceTableRow[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [members, setMembers] = useState<string[]>([]);
+  const [period, setPeriod] = useState<{ startDate?: string; endDate?: string }>({});
 
   const [dataVersion, setDataVersion] = useState(0);
   const [kpiError, setKpiError] = useState<string | null>(null);
@@ -22,6 +27,8 @@ export default function AdminUrlsPage() {
     const params = new URLSearchParams({ range });
     if (project) params.set("project", project);
     if (member) params.set("member", member);
+    if (month) params.set("month", month);
+    if (workedOnly) params.set("workedOnly", "1");
 
     fetch(`/api/admin/urls?${params.toString()}`)
       .then((r) => r.json())
@@ -29,8 +36,9 @@ export default function AdminUrlsPage() {
         setRows(data.rows ?? []);
         setProjects(data.projects ?? []);
         setMembers(data.members ?? []);
+        setPeriod({ startDate: data.startDate, endDate: data.endDate });
       });
-  }, [range, project, member, dataVersion]);
+  }, [range, project, member, month, workedOnly, dataVersion]);
 
   async function toggleKpiExclusion(row: PerformanceTableRow) {
     const excluding = !row.kpi_excluded;
@@ -87,15 +95,49 @@ export default function AdminUrlsPage() {
                 </option>
               ))}
             </select>
+            <span className="text-xs text-ink-subtle">
+              Credited by work in the period, not by who currently owns the URL.
+            </span>
           </Field>
+          <Field label="Month">
+            <div className="flex gap-2">
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className={inputClass} />
+              {month && (
+                <button
+                  onClick={() => setMonth("")}
+                  className="whitespace-nowrap rounded-lg border border-line-strong px-3 text-sm text-ink transition-colors hover:bg-neutral-soft"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <span className="text-xs text-ink-subtle">Empty means the whole selected range.</span>
+          </Field>
+          <label className="flex items-center gap-2 pb-1 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={workedOnly}
+              onChange={(e) => setWorkedOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-line-strong"
+            />
+            Only URLs worked in this period
+          </label>
         </div>
 
         {kpiError && <p className="px-5 pt-3 text-[13px] text-negative">{kpiError}</p>}
         <PerformanceTable rows={rows} showMember onToggleKpiExclusion={toggleKpiExclusion} />
-        <p className="border-t border-line px-5 py-3 text-[13px] text-ink-muted">
-          Excluding a URL takes it out of KPI scoring entirely. Run <strong>Recompute scores</strong> in Admin →
-          Overview to apply the change.
-        </p>
+        <div className="space-y-1 border-t border-line px-5 py-3 text-[13px] text-ink-muted">
+          <p>
+            Clicks, impressions and deltas always come from the <strong>{RANGE_LABELS[range] ?? range}</strong> cache —
+            the only windows Search Console data is refreshed for. Month and member only decide{" "}
+            <em>which URLs are listed</em>
+            {period.startDate && period.endDate ? ` (work between ${period.startDate} and ${period.endDate})` : ""}.
+          </p>
+          <p>
+            Excluding a URL takes it out of KPI scoring entirely. Run <strong>Recompute scores</strong> in Admin →
+            Overview to apply the change.
+          </p>
+        </div>
       </Card>
     </div>
   );

@@ -60,6 +60,19 @@ export function formatContentScore(value: number | null | undefined): string {
 }
 
 /**
+ * A stored date, as a person reads it. Dates come out of Postgres already as
+ * YYYY-MM-DD strings, so only the day is taken: building a Date from one would
+ * parse it as UTC midnight and render as the day before in any timezone west of
+ * Greenwich.
+ */
+export function formatDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const [year, month, day] = value.slice(0, 10).split("-");
+  if (!year || !month || !day) return "—";
+  return `${day}/${month}/${year}`;
+}
+
+/**
  * Trend never travels as colour alone — the label is the message, the glyph and
  * the tone only reinforce it.
  */

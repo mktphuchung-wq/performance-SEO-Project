@@ -6,7 +6,6 @@ import { Badge, Button, Card, CardHeader, EmptyState, Field, PageHeader, inputCl
 import { StatCard } from "@/components/StatCard";
 import { currentMonthInputValue, formatMonthLabel, normalizeMonth } from "@/lib/content-review/month";
 import { taskQualityPct } from "@/lib/content-review/quality";
-import type { ParsedTaskRow } from "@/lib/content-review/parse-paste";
 import { formatContentScore, formatPercent } from "@/lib/format";
 import type {
   ContentReviewBatch,
@@ -59,6 +58,16 @@ function shortUrls(urls: string): string {
 /** A note is saved this long after the last keystroke, and immediately on blur. */
 const NOTE_DEBOUNCE_MS = 600;
 
+interface ManualTaskDraft {
+  workedAt: string;
+  project: string;
+  workType: string;
+  taskTitle: string;
+  urls: string;
+}
+
+const EMPTY_MANUAL_TASK: ManualTaskDraft = { workedAt: "", project: "", workType: "", taskTitle: "", urls: "" };
+
 /**
  * Content KPI — the manual review screen.
  *
@@ -101,9 +110,9 @@ export default function AdminContentReviewPage() {
   // one cancel the first one's save.
   const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const [pasteText, setPasteText] = useState("");
-  const [preview, setPreview] = useState<{ rows: ParsedTaskRow[]; warnings: string[] } | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [draft, setDraft] = useState<ManualTaskDraft>(EMPTY_MANUAL_TASK);
+  const [adding, setAdding] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     fetch("/api/admin/content-review/members")
@@ -141,9 +150,9 @@ export default function AdminContentReviewPage() {
       .then((body) => {
         applyBatch(body);
         setError(null);
-        // A preview belongs to the month it was parsed against; keeping it after
-        // a switch would offer to import someone else rows.
-        setPreview(null);
+        // A half-typed row belongs to the month it was started in; carrying it
+        // across a switch would offer to file it under someone else.
+        setDraft(EMPTY_MANUAL_TASK);
       })
       .catch((err: Error) => {
         setData(null);
@@ -292,49 +301,55 @@ export default function AdminContentReviewPage() {
     noteTimers.current[taskId] = setTimeout(() => void saveNote(taskId, value), NOTE_DEBOUNCE_MS);
   }
 
-  async function runPreview() {
-    if (!batch) return;
-    const res = await fetch(`/api/admin/content-review/batch/${batch.id}/paste`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: pasteText, dryRun: true }),
-    });
-    const payload = await res.json();
-    if (!res.ok) {
-      setError(payload.error ?? "Could not read the pasted text");
-      return;
-    }
-    setError(null);
-    setPreview({ rows: payload.rows ?? [], warnings: payload.warnings ?? [] });
+  /** Applies whatever a write returned, so the screen shows what is stored. */
+  function applyTaskWrite(payload: { batch: ContentReviewBatch; tasks: ContentReviewTask[]; scores: ContentReviewScore[] }) {
+    const storedNotes = Object.fromEntries(payload.tasks.map((task) => [task.id, task.note ?? ""]));
+    setNotes(storedNotes);
+    committedNotes.current = storedNotes;
+    setData((current) =>
+      current ? { ...current, batch: payload.batch, tasks: payload.tasks, scores: payload.scores } : current,
+    );
   }
 
-  async function confirmImport() {
+  /**
+   * Pulls this month's work in again. Opening the month already did it — this is
+   * for the reviewer who left the screen open while a Sheet sync ran.
+   */
+  async function refreshFromSync() {
     if (!batch) return;
-    setImporting(true);
+    setSyncing(true);
     try {
-      const res = await fetch(`/api/admin/content-review/batch/${batch.id}/paste`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: pasteText }),
-      });
+      const res = await fetch(`/api/admin/content-review/batch/${batch.id}/sync`, { method: "POST" });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload.error ?? "Could not import");
-
-      setPasteText("");
-      setPreview(null);
+      if (!res.ok) throw new Error(payload.error ?? "Could not refresh from the synced data");
+      applyTaskWrite(payload);
       setError(null);
-      const importedNotes = Object.fromEntries(
-        (payload.tasks as ContentReviewTask[]).map((task) => [task.id, task.note ?? ""]),
-      );
-      setNotes(importedNotes);
-      committedNotes.current = importedNotes;
-      setData((current) =>
-        current ? { ...current, batch: payload.batch, tasks: payload.tasks, scores: payload.scores } : current,
-      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setImporting(false);
+      setSyncing(false);
+    }
+  }
+
+  /** The escape hatch: work the Sheet has no row for, usually because it has no URL yet. */
+  async function addManualTask() {
+    if (!batch) return;
+    setAdding(true);
+    try {
+      const res = await fetch(`/api/admin/content-review/batch/${batch.id}/task`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error ?? "Could not add this task");
+      applyTaskWrite(payload);
+      setDraft(EMPTY_MANUAL_TASK);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setAdding(false);
     }
   }
 
@@ -468,74 +483,66 @@ export default function AdminContentReviewPage() {
 
       <Card>
         <CardHeader
-          title="Paste from the Sheet"
-          description="Select the data cells only — Ngày | Dự án - Web | Type | Task | URLs — and paste. Nothing is stored until you have looked at the preview."
-        />
-        <div className="space-y-3 px-5 py-4">
-          <textarea
-            value={pasteText}
-            onChange={(e) => setPasteText(e.target.value)}
-            rows={5}
-            disabled={!batch}
-            placeholder="05/08/2026&#9;Project A&#9;Blog&#9;Top 10 running shoes&#9;https://…"
-            className={`${inputClass} font-mono text-[13px]`}
-          />
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="secondary" onClick={() => void runPreview()} disabled={!batch || !pasteText.trim()}>
-              Preview
+          title="Tasks this month"
+          description="Every URL this member worked on in the month is pulled in from the synced Sheet data automatically — there is nothing to paste. Add a row by hand only when the Sheet is missing one."
+          action={
+            <Button variant="secondary" onClick={() => void refreshFromSync()} disabled={!batch || syncing}>
+              {syncing ? "Refreshing…" : "Refresh from synced data"}
             </Button>
-            {preview && (
-              <>
-                <Button onClick={() => void confirmImport()} disabled={importing || preview.rows.length === 0}>
-                  {importing ? "Adding…" : `Add ${preview.rows.length} tasks`}
-                </Button>
-                <Button variant="secondary" onClick={() => setPreview(null)} disabled={importing}>
-                  Cancel
-                </Button>
-              </>
-            )}
+          }
+        />
+        <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-6">
+          <Field label="Date">
+            <input
+              type="date"
+              value={draft.workedAt}
+              disabled={!batch}
+              onChange={(e) => setDraft((current) => ({ ...current, workedAt: e.target.value }))}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Project">
+            <input
+              value={draft.project}
+              disabled={!batch}
+              onChange={(e) => setDraft((current) => ({ ...current, project: e.target.value }))}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Type">
+            <input
+              value={draft.workType}
+              disabled={!batch}
+              placeholder="new post, audit…"
+              onChange={(e) => setDraft((current) => ({ ...current, workType: e.target.value }))}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Task">
+            <input
+              value={draft.taskTitle}
+              disabled={!batch}
+              onChange={(e) => setDraft((current) => ({ ...current, taskTitle: e.target.value }))}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="URL">
+            <input
+              value={draft.urls}
+              disabled={!batch}
+              placeholder="Leave empty if there is no URL yet"
+              onChange={(e) => setDraft((current) => ({ ...current, urls: e.target.value }))}
+              className={inputClass}
+            />
+          </Field>
+          <div className="flex items-end">
+            <Button
+              onClick={() => void addManualTask()}
+              disabled={!batch || adding || (!draft.taskTitle.trim() && !draft.urls.trim())}
+            >
+              {adding ? "Adding…" : "Add task"}
+            </Button>
           </div>
-
-          {preview?.warnings.map((warning) => (
-            <p key={warning} className="text-[13px] text-warning">
-              {warning}
-            </p>
-          ))}
-
-          {preview && preview.rows.length > 0 && (
-            <div className="overflow-x-auto rounded-lg border border-line">
-              <table className="w-full text-left text-[13px]">
-                <thead className="bg-neutral-soft text-xs uppercase tracking-wide text-ink-subtle">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Date</th>
-                    <th className="px-3 py-2 font-medium">Project</th>
-                    <th className="px-3 py-2 font-medium">Type</th>
-                    <th className="px-3 py-2 font-medium">Task</th>
-                    <th className="px-3 py-2 font-medium">URLs</th>
-                    <th className="px-3 py-2 font-medium">Columns</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {preview.rows.map((row) => (
-                    <tr key={row.sourceRowNumber}>
-                      <td className="px-3 py-2 numeric">
-                        {row.workedAt ?? <span className="text-warning">{row.workedAtRaw || "—"}</span>}
-                      </td>
-                      <td className="px-3 py-2">{row.project || "—"}</td>
-                      <td className="px-3 py-2">{row.workType || "—"}</td>
-                      <td className="px-3 py-2">{row.taskTitle || "—"}</td>
-                      <td className="max-w-[240px] truncate px-3 py-2 text-ink-muted" title={row.urls}>
-                        {shortUrls(row.urls)}
-                      </td>
-                      <td className={`px-3 py-2 numeric ${row.columnCount === 5 ? "text-ink-subtle" : "text-warning"}`}>
-                        {row.columnCount}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
       </Card>
 
@@ -555,7 +562,10 @@ export default function AdminContentReviewPage() {
         )}
 
         {!loading && batch && columns.length > 0 && data && data.tasks.length === 0 && (
-          <EmptyState title="No tasks in this month yet" hint="Paste the member rows from the Sheet above." />
+          <EmptyState
+            title="No tasks in this month yet"
+            hint="Nothing was synced for this member in this month. Run Sync in Admin → Overview, or add a task by hand above."
+          />
         )}
 
         {!loading && batch && columns.length > 0 && data && data.tasks.length > 0 && (
@@ -586,8 +596,11 @@ export default function AdminContentReviewPage() {
                       <div className="truncate text-ink" title={task.task_title}>
                         {task.task_title || "—"}
                       </div>
-                      <div className="truncate text-[12px] text-ink-subtle" title={`${task.project} · ${task.work_type}`}>
-                        {[task.project, task.work_type].filter(Boolean).join(" · ") || "—"}
+                      <div className="flex items-center gap-2 truncate text-[12px] text-ink-subtle">
+                        <span className="truncate" title={`${task.project} · ${task.work_type}`}>
+                          {[task.project, task.work_type].filter(Boolean).join(" · ") || "—"}
+                        </span>
+                        {task.source === "manual" && <Badge tone="neutral">Added by hand</Badge>}
                       </div>
                       <div className="truncate text-[12px] text-ink-subtle" title={task.urls}>
                         {shortUrls(task.urls)}
@@ -639,8 +652,11 @@ export default function AdminContentReviewPage() {
                       />
                     </td>
                     <td className="px-2 py-2 text-right">
+                      {/* A generated row is only hidden from the month — the work
+                          event behind it stays, so the wording says "dismiss"
+                          rather than promising a delete it does not do. */}
                       <Button variant="danger" onClick={() => void removeTask(task.id)}>
-                        Delete
+                        {task.content_url_work_id ? "Dismiss" : "Delete"}
                       </Button>
                     </td>
                   </tr>

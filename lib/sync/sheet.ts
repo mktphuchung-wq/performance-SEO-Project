@@ -23,6 +23,14 @@ import { classifyWorkKind } from "@/lib/sync/work-kind";
 const REQUIRED_HEADERS = ["project", "url", "member_name", "date", "type"];
 
 /**
+ * Columns the sync reads when the Sheet has them and ignores when it does not.
+ * `task` is the human title of the piece of work, which Content Review shows in
+ * its grid; a Sheet without the column syncs exactly as before and the review
+ * grid falls back to the URL.
+ */
+const OPTIONAL_HEADERS = ["task"];
+
+/**
  * The Sheet row that currently speaks for the URL: the latest work done on it.
  * Ties go to the row further down the Sheet, which is the one a person added
  * most recently.
@@ -47,6 +55,20 @@ function publishedAtOf(works: BulkUpsertContentUrlWorkInput[]): string | null {
 }
 
 /**
+ * The first time anyone worked on this URL, whatever the work was.
+ *
+ * Deliberately not filtered by workKind the way publishedAtOf is: that one gates
+ * Search Console data so it may only trust a row that claims to have created the
+ * URL, while this one is shown next to worked_at to say how long the URL has
+ * been worked on. A URL only ever audited has a first_worked_at and no
+ * published_at, and that is the correct reading of both.
+ */
+function firstWorkedAtOf(works: BulkUpsertContentUrlWorkInput[]): string | null {
+  const dates = works.map((work) => work.workedAt).filter((date): date is string => Boolean(date));
+  return dates.length > 0 ? dates.reduce((earliest, date) => (date < earliest ? date : earliest)) : null;
+}
+
+/**
  * Roll a URL's work events up into the single content_urls row that represents
  * it. The URL keeps its current owner and type for everything the UI already
  * shows; the per-event history stays in content_url_works.
@@ -58,6 +80,7 @@ function contentUrlFrom(
 ): BulkUpsertContentUrlInput {
   const latest = latestWork(works);
   const publishedAt = publishedAtOf(works);
+  const firstWorkedAt = firstWorkedAtOf(works);
   const gscProperty = projectGscProperties.get(latest.project) ?? null;
   return {
     urlHash: latest.urlHash,
@@ -68,6 +91,7 @@ function contentUrlFrom(
     workType: latest.workType,
     gscProperty,
     workedAt: latest.workedAt,
+    firstWorkedAt,
     publishedAt,
     sourceRowNumber: latest.sourceRowNumber,
     contentHash: computeContentHash({
@@ -78,6 +102,7 @@ function contentUrlFrom(
       workType: latest.workType,
       gscProperty,
       publishedAt,
+      firstWorkedAt,
     }),
   };
 }
@@ -86,14 +111,26 @@ function normalizeHeader(header: unknown): string {
   return String(header ?? "").trim().toLowerCase();
 }
 
+/**
+ * Column indexes by name. Optional columns resolve to -1 when the Sheet does not
+ * have them, which every reader treats as an empty cell — adding one to the
+ * Sheet is what turns it on, no deploy needed.
+ */
 function validateHeaders(headerRow: unknown[]): Record<string, number> {
   const normalized = headerRow.map(normalizeHeader);
   const missing = REQUIRED_HEADERS.filter((header) => !normalized.includes(header));
   if (missing.length > 0) throw new Error(`Sheet header missing required columns: ${missing.join(", ")}. Found: ${normalized.join(", ")}`);
-  for (const header of REQUIRED_HEADERS) {
+  for (const header of [...REQUIRED_HEADERS, ...OPTIONAL_HEADERS]) {
     if (normalized.filter((value) => value === header).length > 1) throw new Error(`Sheet header has duplicate column: ${header}`);
   }
-  return Object.fromEntries(REQUIRED_HEADERS.map((header) => [header, normalized.indexOf(header)]));
+  return Object.fromEntries(
+    [...REQUIRED_HEADERS, ...OPTIONAL_HEADERS].map((header) => [header, normalized.indexOf(header)]),
+  );
+}
+
+/** Reads a cell by column index, treating an absent column (-1) as empty. */
+function cell(row: unknown[], index: number): string {
+  return index < 0 ? "" : String(row[index] ?? "").trim();
 }
 
 export async function runSyncJob(runId: string, accessToken: string): Promise<void> {
@@ -121,10 +158,11 @@ export async function runSyncJob(runId: string, accessToken: string): Promise<vo
       const row = dataRows[index];
       const sourceRowNumber = index + 2;
       if (row.every((cell) => String(cell ?? "").trim() === "")) continue;
-      const project = String(row[columns.project] ?? "").trim();
-      const url = String(row[columns.url] ?? "").trim();
-      const memberName = String(row[columns.member_name] ?? "").trim();
-      const workType = String(row[columns.type] ?? "").trim().toLowerCase();
+      const project = cell(row, columns.project);
+      const url = cell(row, columns.url);
+      const memberName = cell(row, columns.member_name);
+      const workType = cell(row, columns.type).toLowerCase();
+      const taskTitle = cell(row, columns.task);
       if (!url) {
         warnings.push(`Row ${sourceRowNumber}: skipped, missing url`);
         failedRows += 1;
@@ -140,7 +178,7 @@ export async function runSyncJob(runId: string, accessToken: string): Promise<vo
       const workKind = classifyWorkKind(workType);
       const work: BulkUpsertContentUrlWorkInput = {
         workHash: computeWorkHash({ urlHash, workedAt: parsedDate.value, workType, memberName }),
-        contentHash: computeWorkContentHash({ project, memberEmail, workKind, sourceRowNumber }),
+        contentHash: computeWorkContentHash({ project, memberEmail, workKind, sourceRowNumber, taskTitle }),
         urlHash,
         project,
         memberName,
@@ -148,6 +186,7 @@ export async function runSyncJob(runId: string, accessToken: string): Promise<vo
         workType,
         workKind,
         workedAt: parsedDate.value,
+        taskTitle,
         sourceRowNumber,
       };
       // Only a row identical in URL, date, type and member is the same work

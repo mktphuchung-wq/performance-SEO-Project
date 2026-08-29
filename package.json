@@ -12,6 +12,7 @@
     "verify:refresh-db": "node scripts/verify-refresh-db.mjs",
     "verify:work-events": "node scripts/verify-work-events.mjs",
     "verify:work-events-db": "node scripts/verify-work-events-db.mjs",
+    "verify:review-autosync": "node scripts/verify-review-autosync.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

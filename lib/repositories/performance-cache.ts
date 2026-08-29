@@ -2,6 +2,7 @@ import { query, type DbExecutor } from "@/lib/db";
 import { getSyncBulkChunkSize } from "@/lib/env";
 import type { GrowthResult } from "@/lib/performance/growth";
 import type { RangeKey } from "@/lib/ranges";
+import { memberAttributionPredicate } from "@/lib/repositories/content-url-works";
 
 export interface UpsertPerformanceCacheInput {
   contentUrlId: string;
@@ -249,19 +250,34 @@ export interface UrlPerformanceRow {
   member_name: string;
   member_email: string | null;
   work_type: string;
+  /** The earliest work event on the URL — when the team started working on it. */
+  first_worked_at: string | null;
+  /** The most recent work event on the URL. */
+  worked_at: string | null;
+  published_at: string | null;
+  /**
+   * Work events on this URL inside the period being looked at. 0 means nobody
+   * touched it in the period, so its traffic counts for its current owner rather
+   * than for anyone who worked it. Null when no period was supplied.
+   */
+  period_work_count: number | null;
   kpi_excluded: boolean;
   kpi_excluded_reason: string | null;
 }
 
-export async function listPerformanceByMemberEmail(email: string, rangeKey: RangeKey): Promise<UrlPerformanceRow[]> {
-  return query<UrlPerformanceRow>(
-    `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
+/** The columns every URL listing shares, so the three queries cannot drift apart. */
+const URL_PERFORMANCE_COLUMNS = `c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
             p.clicks, p.impressions, p.ctr, p.position,
             p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
             p.growth_status, p.data_status, p.error_message, p.refreshed_at,
             c.project, c.url, c.member_name, c.member_email, c.work_type,
-            c.kpi_excluded, c.kpi_excluded_reason
+            c.first_worked_at, c.worked_at, c.published_at,
+            c.kpi_excluded, c.kpi_excluded_reason`;
+
+export async function listPerformanceByMemberEmail(email: string, rangeKey: RangeKey): Promise<UrlPerformanceRow[]> {
+  return query<UrlPerformanceRow>(
+    `select ${URL_PERFORMANCE_COLUMNS}, null::int as period_work_count
      from public.content_urls c
      join public.seo_performance_cache p on p.content_url_id = c.id and p.range_key = $2
      where c.is_active = true and lower(c.member_email) = lower($1)
@@ -270,9 +286,42 @@ export async function listPerformanceByMemberEmail(email: string, rangeKey: Rang
   );
 }
 
-export async function listPerformanceAll(rangeKey: RangeKey, filters: { project?: string; memberName?: string }): Promise<UrlPerformanceRow[]> {
+export interface PerformanceListFilters {
+  project?: string;
+  memberName?: string;
+  /** The period the listing is about. Both dates or neither. */
+  startDate?: string;
+  endDate?: string;
+  /** Drop URLs with no work event in the period instead of listing them all. */
+  workedInPeriodOnly?: boolean;
+}
+
+/**
+ * Every URL with its cached metrics, filtered the way the period says.
+ *
+ * Metrics always come from the `range_key` cache — that is the only window
+ * Search Console data exists for. `startDate`/`endDate` say which URLs the
+ * listing is *about*, which is a different question: a member filter with a
+ * period applies the same attribution rule the KPI scoring uses
+ * (`memberAttributionPredicate`), so picking a person and a month answers "what
+ * did they work on that month", not "what do they currently own". Without a
+ * period there is nothing to attribute against, so ownership is all that is left.
+ */
+export async function listPerformanceAll(
+  rangeKey: RangeKey,
+  filters: PerformanceListFilters,
+): Promise<UrlPerformanceRow[]> {
   const conditions = ["c.is_active = true", "p.range_key = $1"];
   const params: unknown[] = [rangeKey];
+  const hasPeriod = Boolean(filters.startDate && filters.endDate);
+
+  let startParam = "";
+  let endParam = "";
+  if (hasPeriod) {
+    params.push(filters.startDate, filters.endDate);
+    startParam = `$${params.length - 1}`;
+    endParam = `$${params.length}`;
+  }
 
   if (filters.project) {
     params.push(filters.project);
@@ -280,17 +329,27 @@ export async function listPerformanceAll(rangeKey: RangeKey, filters: { project?
   }
   if (filters.memberName) {
     params.push(filters.memberName);
-    conditions.push(`c.member_name = $${params.length}`);
+    const memberParam = `$${params.length}`;
+    conditions.push(
+      hasPeriod
+        ? memberAttributionPredicate("c.id", startParam, endParam, memberParam)
+        : `c.member_name = ${memberParam}`,
+    );
+  }
+  if (hasPeriod && filters.workedInPeriodOnly) {
+    conditions.push(`exists (select 1 from public.content_url_works w
+       where w.content_url_id = c.id and w.is_active = true
+         and w.worked_at between ${startParam} and ${endParam})`);
   }
 
+  const periodWorkCount = hasPeriod
+    ? `(select count(*)::int from public.content_url_works w
+        where w.content_url_id = c.id and w.is_active = true
+          and w.worked_at between ${startParam} and ${endParam})`
+    : "null::int";
+
   return query<UrlPerformanceRow>(
-    `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
-            p.clicks, p.impressions, p.ctr, p.position,
-            p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
-            p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
-            p.growth_status, p.data_status, p.error_message, p.refreshed_at,
-            c.project, c.url, c.member_name, c.member_email, c.work_type,
-            c.kpi_excluded, c.kpi_excluded_reason
+    `select ${URL_PERFORMANCE_COLUMNS}, ${periodWorkCount} as period_work_count
      from public.content_urls c
      join public.seo_performance_cache p on p.content_url_id = c.id
      where ${conditions.join(" and ")}
@@ -301,13 +360,7 @@ export async function listPerformanceAll(rangeKey: RangeKey, filters: { project?
 
 export async function getPerformanceForContentUrl(contentUrlId: string): Promise<UrlPerformanceRow[]> {
   return query<UrlPerformanceRow>(
-    `select c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
-            p.clicks, p.impressions, p.ctr, p.position,
-            p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
-            p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,
-            p.growth_status, p.data_status, p.error_message, p.refreshed_at,
-            c.project, c.url, c.member_name, c.member_email, c.work_type,
-            c.kpi_excluded, c.kpi_excluded_reason
+    `select ${URL_PERFORMANCE_COLUMNS}, null::int as period_work_count
      from public.seo_performance_cache p
      join public.content_urls c on c.id = p.content_url_id
      where p.content_url_id = $1

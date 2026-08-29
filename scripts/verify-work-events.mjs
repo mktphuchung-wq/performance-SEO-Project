@@ -67,6 +67,26 @@ assert.equal(publishedAtOf([audited]), null);
 // Same day, two rows: the row further down the Sheet speaks for the URL.
 assert.equal(latestWork([{ ...written, sourceRowNumber: 7 }, { ...written, memberName: "Chi", sourceRowNumber: 9 }]).memberName, "Chi");
 
+// --- first_worked_at vs published_at ---------------------------------------
+// Mirrors firstWorkedAtOf in lib/sync/sheet.ts. The two dates answer different
+// questions and a URL can legitimately have one without the other.
+const firstWorkedAtOf = (works) => {
+  const dates = works.map((w) => w.workedAt).filter(Boolean);
+  return dates.length > 0 ? dates.reduce((earliest, d) => (d < earliest ? d : earliest)) : null;
+};
+
+// Written then audited: work started in January, and January is also the publish date.
+assert.equal(firstWorkedAtOf([written, audited]), "2026-01-05");
+// Only ever audited: we have been working on it since August, but it was live before that.
+assert.equal(firstWorkedAtOf([audited]), "2026-08-20");
+assert.equal(publishedAtOf([audited]), null);
+// Order in the Sheet does not decide it — the earliest date does.
+assert.equal(firstWorkedAtOf([audited, written]), "2026-01-05");
+// A URL whose rows all had unreadable dates has no first date to show.
+assert.equal(firstWorkedAtOf([{ ...audited, workedAt: null }]), null);
+// It is never later than the latest work event, which is what the URLs tab shows beside it.
+assert.ok(firstWorkedAtOf([written, audited]) <= latestWork([written, audited]).workedAt);
+
 // --- Eligibility -----------------------------------------------------------
 // Mirrors isEligible in lib/performance/refresh.ts.
 const isEligible = (contentUrl, endDate) => !contentUrl.published_at || contentUrl.published_at <= endDate;

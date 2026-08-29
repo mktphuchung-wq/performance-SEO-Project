@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { DATA_STATUS_LABELS, formatCtr, formatNumber, formatPosition } from "@/lib/format";
+import { DATA_STATUS_LABELS, formatCtr, formatDate, formatNumber, formatPosition } from "@/lib/format";
 import { MetricDelta } from "@/components/MetricDelta";
 import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
 
@@ -11,6 +11,11 @@ export interface PerformanceTableRow {
   project: string;
   member_name: string;
   work_type: string;
+  first_worked_at?: string | null;
+  worked_at?: string | null;
+  published_at?: string | null;
+  /** Work events inside the period being viewed; null when no period applies. */
+  period_work_count?: number | null;
   clicks: number | null;
   impressions: number | null;
   ctr: number | null;
@@ -66,13 +71,15 @@ export function PerformanceTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1080px] text-sm">
+      <table className="w-full min-w-[1240px] text-sm">
         <thead>
           <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
             <th className="px-4 py-2.5">URL</th>
             <th className="px-4 py-2.5">Project</th>
             {showMember && <th className="px-4 py-2.5">Member</th>}
             <th className="px-4 py-2.5">Type</th>
+            <th className="px-4 py-2.5" title="First work event on this URL">First worked</th>
+            <th className="px-4 py-2.5" title="Most recent work event on this URL">Last worked</th>
             <th className="px-4 py-2.5 text-right">Clicks</th>
             <th className="px-4 py-2.5 text-right">Δ Clicks</th>
             <th className="px-4 py-2.5 text-right">Impressions</th>
@@ -98,6 +105,23 @@ export function PerformanceTable({
               <td className="px-4 py-2.5 text-ink-muted">{row.project || "—"}</td>
               {showMember && <td className="px-4 py-2.5 text-ink-muted">{row.member_name || "—"}</td>}
               <td className="px-4 py-2.5 text-ink-muted">{row.work_type || "—"}</td>
+              <td
+                className="whitespace-nowrap px-4 py-2.5 numeric text-ink-muted"
+                title={row.published_at ? `Published ${formatDate(row.published_at)}` : "No publish date — already live"}
+              >
+                {formatDate(row.first_worked_at)}
+              </td>
+              <td className="whitespace-nowrap px-4 py-2.5 numeric text-ink-muted">
+                {formatDate(row.worked_at)}
+                {/* Only ever shown when a period is in play. It is the difference
+                    between "this member worked on it this period" and "they just
+                    happen to own it", which is what the KPI attribution turns on. */}
+                {row.period_work_count === 0 && (
+                  <span className="block text-xs text-ink-subtle" title="No work event inside the selected period">
+                    not this period
+                  </span>
+                )}
+              </td>
               <td className="numeric px-4 py-2.5 text-right font-medium text-ink">{formatNumber(row.clicks)}</td>
               <td className="px-4 py-2.5 text-right">
                 <MetricDelta
