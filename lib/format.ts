@@ -160,3 +160,86 @@ export const GROWTH_STATUS_LABELS: Record<string, string> = {
   new_signal: "New signal",
   no_data: "No data",
 };
+
+export const WARNING_LEVEL_LABELS: Record<string, string> = {
+  early_warning: "Early warning",
+  mandatory_audit: "Mandatory audit",
+};
+
+export const AUDIT_STATUS_LABELS: Record<string, string> = {
+  needs_audit: "Needs audit",
+  in_progress: "In progress",
+  resolved: "Resolved",
+  cancelled: "Cancelled",
+};
+
+export const AUDIT_CONCLUSION_LABELS: Record<string, string> = {
+  controllable: "Controllable",
+  external_verified: "External, verified",
+  mixed: "Mixed",
+  insufficient_evidence: "Insufficient evidence",
+};
+
+/** What each conclusion would mean for a score — spelled out, since none of it applies yet. */
+export const AUDIT_CONCLUSION_HINTS: Record<string, string> = {
+  controllable: "Ours to fix. No neutralisation.",
+  external_verified: "Demonstrably outside our control, with evidence.",
+  mixed: "Part external, part ours.",
+  insufficient_evidence: "Could not be shown either way. No neutralisation.",
+};
+
+export const WARNING_RESOLUTION_LABELS: Record<string, string> = {
+  recovered: "Recovered",
+  audit_resolved: "Closed with the audit",
+  superseded: "Superseded",
+};
+
+export const AUDIT_EVENT_LABELS: Record<string, string> = {
+  opened: "Opened",
+  claimed: "Claimed",
+  evidence_updated: "Evidence updated",
+  proposed: "Conclusion proposed",
+  approved: "Approved",
+  rejected: "Sent back",
+  reopened: "Reopened",
+  cancelled: "Cancelled",
+  warning_linked: "Warning linked",
+};
+
+export const AUDIT_ROLE_LABELS: Record<string, string> = {
+  auditor: "Auditor",
+  approver: "Approver",
+  lead: "Lead",
+};
+
+/** KPI points a URL takes off a member. Two decimals: 0.5 and 1 are decision thresholds. */
+export function formatDragPoints(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return Number(value).toFixed(2);
+}
+
+/** A share of capped weight, as a percentage. Null means there was no weight to divide by. */
+export function formatExposure(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
+  return `${(Number(value) * 100).toFixed(1)}%`;
+}
+
+/** "2026-07-01" as "Jul 2026" — evaluation months are months, not days. */
+export function formatMonth(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** How much of the SLA is left, or how far past it the case is. */
+export function formatSlaRemaining(deadline: string | null | undefined, resolvedAt: string | null | undefined): string {
+  if (!deadline) return "—";
+  const end = new Date(deadline).getTime();
+  if (Number.isNaN(end)) return "—";
+  const at = resolvedAt ? new Date(resolvedAt).getTime() : Date.now();
+  const days = Math.round((end - at) / 86_400_000);
+  if (days < 0) return `${Math.abs(days)}d over`;
+  if (days === 0) return "due today";
+  return `${days}d left`;
+}

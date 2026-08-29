@@ -203,6 +203,92 @@ export interface ScoreAggregate {
   totalWeight: number;
 }
 
+/** The score a URL sits at when traffic held flat. Below it, a URL drags its member down. */
+export const NEUTRAL_SCORE = 50;
+
+/**
+ * The per-URL weights the member average is actually taken over.
+ *
+ * Split out of aggregateScore because two callers need the same numbers: the
+ * mean itself, and the Warning evaluator, which has to know how many points one
+ * URL pulls off a member's score. Computing the cap twice would let the two
+ * drift, and a "KPI drag" figure that disagrees with the KPI it claims to
+ * explain is worse than no figure at all.
+ */
+function cappedWeightsOf(
+  normal: UrlScoreResult[],
+  urlWeightCapPct: number,
+): { cappedWeights: number[]; totalWeight: number; cappedUrlCount: number } {
+  const rawTotal = normal.reduce((sum, r) => sum + r.weight, 0);
+  const capValue = rawTotal > 0 ? (urlWeightCapPct / 100) * rawTotal : 0;
+
+  let cappedUrlCount = 0;
+  const cappedWeights = normal.map((r) => {
+    if (capValue > 0 && r.weight > capValue) {
+      cappedUrlCount += 1;
+      return capValue;
+    }
+    return r.weight;
+  });
+
+  return { cappedWeights, totalWeight: cappedWeights.reduce((a, b) => a + b, 0), cappedUrlCount };
+}
+
+export interface UrlContribution {
+  /** Index into the results array that was passed in, so the caller can rejoin its own row. */
+  index: number;
+  score: number;
+  weight: number;
+  cappedWeight: number;
+  /** 0–1 — the fraction of the member's aggregate this URL actually carries. */
+  weightShare: number;
+  /** max(0, 50 - score) × weightShare: points this URL takes off the member's range score. */
+  dragPoints: number;
+}
+
+/**
+ * How hard each URL pulls on one member's range score.
+ *
+ * This is the same arithmetic aggregateScore does, stopped one step earlier —
+ * before the weighted scores are summed — so a single URL's share of the result
+ * can be named. Feeding it the exact array a member was scored from is what
+ * makes dragPoints answer "how many KPI points would this member get back if
+ * this one URL had merely held flat".
+ *
+ * The zero-totalWeight branch mirrors the aggregate's own fallback: when no URL
+ * has any impressions to rank by, every eligible URL carries an equal share, so
+ * drag falls back to max(0, 50 - score) ÷ eligibleUrlCount. Never divides by
+ * zero, and never silently reports 0 drag for a member whose URLs all scored 0.
+ *
+ * Only "normal" URLs appear. Excluded and no-data URLs have no score and no
+ * weight, so they cannot drag anything.
+ */
+export function urlContributions(results: UrlScoreResult[], urlWeightCapPct: number): UrlContribution[] {
+  const indexed = results
+    .map((result, index) => ({ result, index }))
+    .filter((item) => item.result.state === "normal");
+  if (indexed.length === 0) return [];
+
+  const { cappedWeights, totalWeight } = cappedWeightsOf(
+    indexed.map((item) => item.result),
+    urlWeightCapPct,
+  );
+
+  return indexed.map((item, position) => {
+    const score = item.result.score ?? 0;
+    const cappedWeight = cappedWeights[position];
+    const weightShare = totalWeight > 0 ? cappedWeight / totalWeight : 1 / indexed.length;
+    return {
+      index: item.index,
+      score,
+      weight: item.result.weight,
+      cappedWeight,
+      weightShare,
+      dragPoints: Math.max(0, NEUTRAL_SCORE - score) * weightShare,
+    };
+  });
+}
+
 /**
  * Traffic-weighted mean over the "normal" URLs, with a per-URL weight ceiling so
  * a single URL cannot dominate a member's score (e.g. a member with two URLs
@@ -226,19 +312,7 @@ export function aggregateScore(results: UrlScoreResult[], urlWeightCapPct: numbe
     return { kpiScore: null, ...counts, cappedUrlCount: 0, totalWeight: 0 };
   }
 
-  const rawTotal = normal.reduce((sum, r) => sum + r.weight, 0);
-  const capValue = rawTotal > 0 ? (urlWeightCapPct / 100) * rawTotal : 0;
-
-  let cappedUrlCount = 0;
-  const cappedWeights = normal.map((r) => {
-    if (capValue > 0 && r.weight > capValue) {
-      cappedUrlCount += 1;
-      return capValue;
-    }
-    return r.weight;
-  });
-
-  const totalWeight = cappedWeights.reduce((a, b) => a + b, 0);
+  const { cappedWeights, totalWeight, cappedUrlCount } = cappedWeightsOf(normal, urlWeightCapPct);
   const kpiScore =
     totalWeight > 0
       ? normal.reduce((sum, r, i) => sum + (r.score ?? 0) * cappedWeights[i], 0) / totalWeight

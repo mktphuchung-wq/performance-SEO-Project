@@ -14,13 +14,15 @@ import {
   type SearchAnalyticsRow,
 } from "@/lib/google";
 import { classifyGoogleApiError, isWideQueryUnsupported } from "@/lib/google-errors";
+import { attributionIndex, groupByMemberAndProject } from "@/lib/performance/attribution";
 import { computeGrowth, type PeriodMetrics } from "@/lib/performance/growth";
+import { evaluateWarningsForClosedMonth } from "@/lib/performance/warning-evaluation";
 import { aggregateScore, computeUrlScore, robustBaseline } from "@/lib/performance/score";
 import {
   getMonthlyHistoryForUrls,
   isBaselineEligible,
 } from "@/lib/repositories/content-url-monthly-metrics";
-import { getUrlAttributionForRange, type UrlAttributionRow } from "@/lib/repositories/content-url-works";
+import { getUrlAttributionForRange } from "@/lib/repositories/content-url-works";
 import { listActiveContentUrls, listContentUrlsByIds, type ContentUrl } from "@/lib/repositories/content-urls";
 import { getBaselineSettings, getKpiSettings } from "@/lib/repositories/kpi-settings";
 import { upsertMemberScore, upsertProjectScore } from "@/lib/repositories/kpi-score-rollups";
@@ -46,7 +48,7 @@ import {
 } from "@/lib/repositories/refresh-runs";
 import { upsertMemberRollup, upsertProjectRollup } from "@/lib/repositories/rollups";
 import { bulkUpsertUrlPerformanceScores, getScoringInputRowsForRange } from "@/lib/repositories/url-performance-score";
-import { baselineWindows, computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
+import { baselineWindows, closedCalendarMonths, computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
 import { normalizeForGscMatch } from "@/lib/sync/normalize-url";
 
 export async function startRefresh(triggeredBy: string | null, rangeKey: RangeKey): Promise<RefreshRun> {
@@ -344,6 +346,13 @@ async function publishRefreshRun(run: RefreshRun): Promise<void> {
     if (isRollingRange(locked.range_key as RangeKey)) {
       await setRefreshPhase(run.id, "scoring", client);
       await computeAndStoreScores(locked.range_key as RangeKey, locked.start_date, locked.end_date, client);
+      // Warnings are stamped to a closed month, so running this on every refresh
+      // re-states the current month's findings rather than piling up new ones.
+      // Skipped entirely before the first month has closed.
+      if (closedCalendarMonths(1).length > 0) {
+        await setRefreshPhase(run.id, "warning", client);
+        await evaluateWarningsForClosedMonth({ actorId: "refresh", db: client });
+      }
     }
     await finishRefreshRun(
       run.id,
@@ -354,51 +363,10 @@ async function publishRefreshRun(run: RefreshRun): Promise<void> {
   });
 }
 
-/**
- * Who each URL counts for in this window, indexed by URL. A URL can land under
- * more than one member — see getUrlAttributionForRange.
- */
-function attributionIndex(rows: UrlAttributionRow[]): Map<string, UrlAttributionRow[]> {
-  const index = new Map<string, UrlAttributionRow[]>();
-  for (const row of rows) {
-    const owners = index.get(row.content_url_id);
-    if (owners) owners.push(row);
-    else index.set(row.content_url_id, [row]);
-  }
-  return index;
-}
-
-/**
- * Fan one URL's row out to every member credited with it. Falls back to the
- * URL's own member so a row can never be dropped for lack of an attribution
- * entry, whatever the state of the work log.
- */
-function ownersOf(
-  index: Map<string, UrlAttributionRow[]>,
-  row: { content_url_id: string; member_name: string; member_email: string | null },
-): UrlAttributionRow[] {
-  return index.get(row.content_url_id) ?? [
-    { content_url_id: row.content_url_id, member_name: row.member_name, member_email: row.member_email },
-  ];
-}
-
 export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: string, endDate: string, db?: DbExecutor): Promise<void> {
   const rows = await getPerformanceRowsForRange(rangeKey, db);
   const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));
-  const byMember = new Map<string, typeof rows>();
-  const memberEmails = new Map<string, string | null>();
-  const byProject = new Map<string, typeof rows>();
-  for (const row of rows) {
-    const projectKey = row.project || "(unassigned)";
-    if (!byProject.has(projectKey)) byProject.set(projectKey, []);
-    byProject.get(projectKey)!.push(row);
-    for (const owner of ownersOf(index, row)) {
-      const memberKey = owner.member_name || "(unassigned)";
-      if (!byMember.has(memberKey)) byMember.set(memberKey, []);
-      byMember.get(memberKey)!.push(row);
-      if (!memberEmails.get(memberKey)) memberEmails.set(memberKey, owner.member_email);
-    }
-  }
+  const { byMember, memberEmails, byProject } = groupByMemberAndProject(rows, index, (row) => row);
   for (const [memberName, memberRows] of byMember) {
     await upsertMemberRollup(
       memberEmails.get(memberName) ?? null,
@@ -500,20 +468,7 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
     result,
   })), db);
   const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));
-  const byMember = new Map<string, typeof scored>();
-  const memberEmails = new Map<string, string | null>();
-  const byProject = new Map<string, typeof scored>();
-  for (const item of scored) {
-    const projectKey = item.row.project || "(unassigned)";
-    if (!byProject.has(projectKey)) byProject.set(projectKey, []);
-    byProject.get(projectKey)!.push(item);
-    for (const owner of ownersOf(index, item.row)) {
-      const memberKey = owner.member_name || "(unassigned)";
-      if (!byMember.has(memberKey)) byMember.set(memberKey, []);
-      byMember.get(memberKey)!.push(item);
-      if (!memberEmails.get(memberKey)) memberEmails.set(memberKey, owner.member_email);
-    }
-  }
+  const { byMember, memberEmails, byProject } = groupByMemberAndProject(scored, index, (item) => item.row);
   for (const [memberName, items] of byMember) {
     await upsertMemberScore(
       memberEmails.get(memberName) ?? null,

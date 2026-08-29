@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import { AuditRolesPanel } from "@/components/AuditRolesPanel";
 import { KpiWeightsPanel } from "@/components/KpiWeightsPanel";
 import { Badge, Button, Card, CardHeader, Field, PageHeader, inputClass } from "@/components/ui";
 import { PROJECT_TYPE_LABELS } from "@/lib/format";
@@ -31,6 +32,14 @@ interface KpiSettingsRow {
   anomaly_zscore_threshold: number;
   anomaly_ratio_threshold: number;
   anomaly_min_history_months: number;
+  warning_click_drop_pct: number;
+  warning_min_click_loss: number;
+  warning_url_score_ceiling: number;
+  warning_drag_points_1m: number;
+  warning_drag_points_3m: number;
+  warning_consecutive_months: number;
+  audit_sla_days: number;
+  audit_exposure_escalation_pct: number;
 }
 
 const KPI_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string; step: string }> = [
@@ -86,7 +95,59 @@ const BASELINE_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: s
   },
 ];
 
-const SETTINGS_FIELDS = [...KPI_FIELDS, ...BASELINE_FIELDS];
+/**
+ * When a URL is worth a human looking at it. Every one is a starting value for a
+ * backtest rather than settled policy, which is exactly why they are settings and
+ * not constants — the numbers that matter can only be chosen by measuring how
+ * these ones behave.
+ */
+const WARNING_FIELDS: Array<{ key: keyof KpiSettingsRow; label: string; hint: string; step: string }> = [
+  {
+    key: "warning_click_drop_pct",
+    label: "Click drop (%)",
+    hint: "Minimum decline against the baseline",
+    step: "1",
+  },
+  {
+    key: "warning_min_click_loss",
+    label: "Minimum clicks lost",
+    hint: "Absolute floor, so a 3-to-1 URL does not warn",
+    step: "1",
+  },
+  {
+    key: "warning_url_score_ceiling",
+    label: "URL score ceiling",
+    hint: "Only URLs scoring below this can warn",
+    step: "1",
+  },
+  {
+    key: "warning_drag_points_1m",
+    label: "KPI drag · 1M",
+    hint: "Points it must cost the member to warn",
+    step: "0.1",
+  },
+  {
+    key: "warning_drag_points_3m",
+    label: "KPI drag · 3M",
+    hint: "Points it must cost to force an audit",
+    step: "0.1",
+  },
+  {
+    key: "warning_consecutive_months",
+    label: "Consecutive months",
+    hint: "Closed months in a row that escalate to an audit",
+    step: "1",
+  },
+  { key: "audit_sla_days", label: "Audit SLA (days)", hint: "Measures the queue, never a score", step: "1" },
+  {
+    key: "audit_exposure_escalation_pct",
+    label: "Escalation exposure (%)",
+    hint: "Above this share, a case needs a lead",
+    step: "1",
+  },
+];
+
+const SETTINGS_FIELDS = [...KPI_FIELDS, ...BASELINE_FIELDS, ...WARNING_FIELDS];
 
 interface GscSite {
   siteUrl: string;
@@ -425,6 +486,29 @@ export default function AdminSettingsPage() {
                   ))}
                 </div>
               </div>
+              <div className="border-t border-line pt-4">
+                <h3 className="text-[13px] font-medium text-ink">Warning &amp; audit thresholds</h3>
+                <p className="mb-3 text-xs text-ink-subtle">
+                  When a declining URL is queued for a human to look at. A warning is never a score change: it says
+                  a URL is costing a member measurable KPI points and someone should find out why. Impact is one of
+                  the conditions on purpose &mdash; a URL can be down 80% and still not warn if it carries too
+                  little of that member&apos;s traffic to move their number.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {WARNING_FIELDS.map((field) => (
+                    <Field key={field.key} label={field.label}>
+                      <input
+                        type="number"
+                        step={field.step}
+                        value={kpiDraft[field.key] ?? ""}
+                        onChange={(e) => setKpiDraft((draft) => ({ ...draft, [field.key]: e.target.value }))}
+                        className={inputClass}
+                      />
+                      <span className="text-xs text-ink-subtle">{field.hint}</span>
+                    </Field>
+                  ))}
+                </div>
+              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button onClick={saveKpiSettings} disabled={kpiSaving}>
                   {kpiSaving ? "Saving…" : "Save KPI settings"}
@@ -450,6 +534,8 @@ export default function AdminSettingsPage() {
       </Card>
 
       <KpiWeightsPanel />
+
+      <AuditRolesPanel />
 
       <Card>
         <CardHeader

@@ -2,6 +2,7 @@ import { query, queryOne, type DbExecutor } from "@/lib/db";
 import type { AnomalySettings } from "@/lib/performance/anomaly";
 import type { KpiPeriodWeights } from "@/lib/performance/composite-score";
 import type { KpiSettings } from "@/lib/performance/score";
+import type { WarningThresholds } from "@/lib/performance/warning";
 
 export interface KpiSettingsRow {
   target_growth_pct_new: number;
@@ -20,6 +21,14 @@ export interface KpiSettingsRow {
   anomaly_zscore_threshold: number;
   anomaly_ratio_threshold: number;
   anomaly_min_history_months: number;
+  warning_click_drop_pct: number;
+  warning_min_click_loss: number;
+  warning_url_score_ceiling: number;
+  warning_drag_points_1m: number;
+  warning_drag_points_3m: number;
+  warning_consecutive_months: number;
+  audit_sla_days: number;
+  audit_exposure_escalation_pct: number;
 }
 
 /**
@@ -44,6 +53,14 @@ export const KPI_SETTINGS_COLUMNS = [
   "anomaly_zscore_threshold",
   "anomaly_ratio_threshold",
   "anomaly_min_history_months",
+  "warning_click_drop_pct",
+  "warning_min_click_loss",
+  "warning_url_score_ceiling",
+  "warning_drag_points_1m",
+  "warning_drag_points_3m",
+  "warning_consecutive_months",
+  "audit_sla_days",
+  "audit_exposure_escalation_pct",
 ] as const;
 
 export type KpiSettingsColumn = (typeof KPI_SETTINGS_COLUMNS)[number];
@@ -84,6 +101,28 @@ export async function getBaselineSettings(db?: DbExecutor): Promise<BaselineSett
       ratioThreshold: Number(row.anomaly_ratio_threshold),
       minHistoryMonths: Number(row.anomaly_min_history_months),
     },
+  };
+}
+
+/**
+ * When a URL is worth a human looking at it, and how long they have.
+ *
+ * A fourth reader on the same row, for the same reason the baseline and
+ * composite ones are separate: these tune neither how a URL is graded nor how
+ * the periods combine. They decide what gets queued, and nothing in Layer 1, 2
+ * or 3 reads them.
+ */
+export async function getWarningSettings(db?: DbExecutor): Promise<WarningThresholds> {
+  const row = await getKpiSettingsRow(db);
+  return {
+    clickDropPct: Number(row.warning_click_drop_pct),
+    minClickLoss: Number(row.warning_min_click_loss),
+    urlScoreCeiling: Number(row.warning_url_score_ceiling),
+    dragPoints1m: Number(row.warning_drag_points_1m),
+    dragPoints3m: Number(row.warning_drag_points_3m),
+    consecutiveMonths: Number(row.warning_consecutive_months),
+    auditSlaDays: Number(row.audit_sla_days),
+    exposureEscalationPct: Number(row.audit_exposure_escalation_pct),
   };
 }
 

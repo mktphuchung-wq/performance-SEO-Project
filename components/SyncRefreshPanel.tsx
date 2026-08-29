@@ -53,6 +53,10 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
   const [recomputeMessage, setRecomputeMessage] = useState<string | null>(null);
   const [recomputeFailed, setRecomputeFailed] = useState(false);
 
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluateMessage, setEvaluateMessage] = useState<string | null>(null);
+  const [evaluateFailed, setEvaluateFailed] = useState(false);
+
   const [snapshotMonths, setSnapshotMonths] = useState("1");
   const [snapshotting, setSnapshotting] = useState(false);
   const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
@@ -106,6 +110,27 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
       setRecomputeMessage((error as Error).message);
     } finally {
       setRecomputing(false);
+    }
+  }
+
+  async function handleEvaluateWarnings() {
+    setEvaluating(true);
+    setEvaluateMessage(null);
+    setEvaluateFailed(false);
+    try {
+      const res = await fetch("/api/admin/kpi/evaluate-warnings", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Evaluation failed");
+      setEvaluateMessage(
+        `${data.warningsWritten} warning(s) — ${data.earlyWarnings} early, ${data.mandatoryAudits} mandatory · `
+        + `${data.auditsOpened} case(s) opened · ${data.recoveredWarnings} recovered`,
+      );
+      onDone?.();
+    } catch (error) {
+      setEvaluateFailed(true);
+      setEvaluateMessage((error as Error).message);
+    } finally {
+      setEvaluating(false);
     }
   }
 
@@ -368,7 +393,27 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
       </div>
 
       <div className="space-y-2 border-t border-line px-5 py-4">
-        <h3 className="text-[13px] font-medium text-ink">4 · Record monthly history</h3>
+        <h3 className="text-[13px] font-medium text-ink">4 · Evaluate warnings</h3>
+        <p className="text-[13px] leading-5 text-ink-muted">
+          Flags the URLs costing members measurable KPI points and opens an audit for the worst of them. Reads the
+          scores already stored and changes none of them. Warnings are stamped to the latest closed calendar month,
+          so pressing this twice in a month restates that month rather than queuing the same URL again. A refresh
+          runs it automatically; this is for after retuning a threshold.
+        </p>
+        <Button
+          variant="secondary"
+          onClick={handleEvaluateWarnings}
+          disabled={evaluating || syncing || refreshing || recomputing}
+        >
+          {evaluating ? "Evaluating…" : "Evaluate warnings"}
+        </Button>
+        {evaluateMessage && (
+          <p className={`text-[13px] ${evaluateFailed ? "text-negative" : "text-ink-muted"}`}>{evaluateMessage}</p>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t border-line px-5 py-4">
+        <h3 className="text-[13px] font-medium text-ink">5 · Record monthly history</h3>
         <p className="text-[13px] leading-5 text-ink-muted">
           Stores closed calendar months so a score can be graded against several past periods instead of only the one
           before it, and flags months that stand far out from a URL&apos;s own history so they do not become the

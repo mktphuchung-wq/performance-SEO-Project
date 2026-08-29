@@ -66,6 +66,33 @@ function validate(merged: KpiSettingsRow): string | null {
   if (!Number.isInteger(merged.anomaly_min_history_months) || merged.anomaly_min_history_months < 2) {
     return "anomaly_min_history_months must be a whole number of at least 2";
   }
+  // Warning thresholds. All experimental starting values by design — the point of
+  // making them settings is that they get backtested and retuned, so the only
+  // rules here are the ones that keep a rule meaningful at all.
+  if (!(merged.warning_click_drop_pct > 0 && merged.warning_click_drop_pct < 100)) {
+    // 0 would warn on every URL that merely failed to grow; 100 could never fire.
+    return "warning_click_drop_pct must be greater than 0 and less than 100";
+  }
+  if (!(merged.warning_min_click_loss >= 0)) {
+    return "warning_min_click_loss cannot be negative";
+  }
+  if (!(merged.warning_url_score_ceiling > 0 && merged.warning_url_score_ceiling <= 100)) {
+    return "warning_url_score_ceiling must be between 0 and 100";
+  }
+  for (const key of ["warning_drag_points_1m", "warning_drag_points_3m"] as const) {
+    if (!(merged[key] >= 0)) return `${key} cannot be negative`;
+  }
+  // "Two consecutive periods" needs at least two to be a streak rather than a
+  // restatement of the single-period rule.
+  if (!Number.isInteger(merged.warning_consecutive_months) || merged.warning_consecutive_months < 2) {
+    return "warning_consecutive_months must be a whole number of at least 2";
+  }
+  if (!Number.isInteger(merged.audit_sla_days) || merged.audit_sla_days < 1) {
+    return "audit_sla_days must be a whole number of at least 1";
+  }
+  if (!(merged.audit_exposure_escalation_pct > 0 && merged.audit_exposure_escalation_pct <= 100)) {
+    return "audit_exposure_escalation_pct must be greater than 0 and at most 100";
+  }
   return null;
 }
 

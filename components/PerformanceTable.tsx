@@ -1,7 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { DATA_STATUS_LABELS, formatCtr, formatDate, formatNumber, formatPosition } from "@/lib/format";
+import {
+  DATA_STATUS_LABELS,
+  WARNING_LEVEL_LABELS,
+  formatCtr,
+  formatDate,
+  formatNumber,
+  formatPosition,
+} from "@/lib/format";
 import { MetricDelta } from "@/components/MetricDelta";
 import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
 
@@ -55,12 +62,19 @@ export function PerformanceTable({
   showMember = false,
   onToggleKpiExclusion,
   onInspectHistory,
+  warningLevelByUrlId,
 }: {
   rows: PerformanceTableRow[];
   showMember?: boolean;
   /** Supplied only by the admin view — its presence is what adds the KPI column. */
   onToggleKpiExclusion?: (row: PerformanceTableRow) => void;
   onInspectHistory?: (row: PerformanceTableRow) => void;
+  /**
+   * Open warning level per URL, if the caller already has it. A marker only —
+   * a flagged URL is one somebody should look at, not one that has been scored
+   * differently, and no number in this table changes because of it.
+   */
+  warningLevelByUrlId?: Record<string, string>;
 }) {
   if (rows.length === 0) {
     return (
@@ -103,6 +117,13 @@ export function PerformanceTable({
                 >
                   {shortenUrl(row.url)}
                 </Link>
+                {warningLevelByUrlId?.[row.content_url_id] && (
+                  <span className="mt-1 inline-block">
+                    <Badge tone={warningLevelByUrlId[row.content_url_id] === "mandatory_audit" ? "negative" : "warning"}>
+                      {WARNING_LEVEL_LABELS[warningLevelByUrlId[row.content_url_id]] ?? "Flagged"}
+                    </Badge>
+                  </span>
+                )}
               </td>
               <td className="px-4 py-2.5 text-ink-muted">{row.project || "—"}</td>
               {showMember && <td className="px-4 py-2.5 text-ink-muted">{row.member_name || "—"}</td>}

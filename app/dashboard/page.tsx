@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ContentKpiCard, type ContentKpiCardData } from "@/components/ContentKpiCard";
 import { ContentReviewSummary } from "@/components/ContentReviewSummary";
 import { MemberKpiSummary } from "@/components/MemberKpiSummary";
+import { MemberWarningsCard, type MemberWarningRow } from "@/components/MemberWarningsCard";
 import { RangeSwitcher } from "@/components/RangeSwitcher";
 import { StatCard } from "@/components/StatCard";
 import { PerformanceTable, type PerformanceTableRow } from "@/components/PerformanceTable";
@@ -27,8 +28,47 @@ export default function DashboardPage() {
   const [contentHistory, setContentHistory] = useState<ContentReviewBatch[]>([]);
   const [contentLoading, setContentLoading] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [warnings, setWarnings] = useState<MemberWarningRow[]>([]);
+  const [warningsLoading, setWarningsLoading] = useState(true);
+  const [warningsError, setWarningsError] = useState<string | null>(null);
 
   const scoreable = isRollingRange(range as RangeKey);
+
+  // Fetched once for the whole page: the card lists them, and the URL table
+  // marks the same URLs in place. Warnings do not depend on the selected range.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/me/warnings")
+      .then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error ?? "Could not load warnings");
+        return body;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setWarnings(body.rows ?? []);
+        setWarningsError(null);
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setWarnings([]);
+        setWarningsError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setWarningsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Mandatory audits win over early warnings when a URL carries both.
+  const warningLevelByUrlId = warnings.reduce<Record<string, string>>((acc, warning) => {
+    if (warning.resolved_at !== null) return acc;
+    if (acc[warning.content_url_id] === "mandatory_audit") return acc;
+    acc[warning.content_url_id] = warning.level;
+    return acc;
+  }, {});
 
   // Official KPI is derived from 1M + 3M + 6M together, so it is fetched once
   // and never refetched when the range changes — the RangeSwitcher investigates
@@ -116,6 +156,8 @@ export default function DashboardPage() {
           below rather than merged in — one number that averaged traffic growth
           with a review score would explain neither. */}
       <ContentKpiCard data={contentKpi} loading={contentLoading} />
+
+      <MemberWarningsCard rows={warnings} loading={warningsLoading} error={warningsError} />
       <ContentReviewSummary history={contentHistory} loading={contentLoading} />
 
       {/* The switcher sits below the KPI, next to what it actually controls.
@@ -200,7 +242,7 @@ export default function DashboardPage() {
         {loading ? (
           <p className="px-5 py-10 text-center text-sm text-ink-muted">Loading…</p>
         ) : (
-          <PerformanceTable rows={rows} />
+          <PerformanceTable rows={rows} warningLevelByUrlId={warningLevelByUrlId} />
         )}
       </Card>
     </div>

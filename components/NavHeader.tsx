@@ -44,6 +44,7 @@ export function NavHeader() {
               <NavLink href="/admin/members" label="Members" />
               <NavLink href="/admin/projects" label="Projects" />
               <NavLink href="/admin/urls" label="URLs" />
+              <NavLink href="/admin/audits" label="Warnings" />
               <NavLink href="/admin/settings" label="Settings" />
             </>
           )}

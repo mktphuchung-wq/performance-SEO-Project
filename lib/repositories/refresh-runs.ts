@@ -21,6 +21,7 @@ export type RefreshRunPhase =
   | "publishing"
   | "rollup"
   | "scoring"
+  | "warning"
   | "completed";
 
 export interface RefreshRun {

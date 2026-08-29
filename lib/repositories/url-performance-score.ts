@@ -219,3 +219,53 @@ export async function listUrlScores(
     params,
   );
 }
+
+export interface ScoreContributionRow {
+  content_url_id: string;
+  project: string;
+  member_name: string;
+  member_email: string | null;
+  url: string;
+  start_date: string;
+  end_date: string;
+  score_state: string;
+  score: number | null;
+  weight: number;
+  data_status: string;
+  current_clicks: number | null;
+  baseline_clicks: number | null;
+  baseline_sample_count: number;
+}
+
+/**
+ * The published score rows for a range, in the shape the warning evaluator needs.
+ *
+ * Deliberately reads what was stored rather than recomputing: a warning that
+ * quoted a score nobody could find on the dashboard would be arguing with the
+ * KPI it is supposed to explain. The cost is that a warning is only ever as
+ * fresh as the last refresh, which is the correct trade — warnings are graded on
+ * closed months, not on the minute.
+ */
+export async function getScoreContributionRowsForRange(
+  rangeKey: RangeKey,
+  db?: DbExecutor,
+): Promise<ScoreContributionRow[]> {
+  const sql = `select s.content_url_id, c.project, c.member_name, c.member_email, c.url,
+             s.start_date, s.end_date,
+             s.score_state, s.score, s.weight, s.baseline_sample_count,
+             -- The same fallback computeUrlScore itself applies: with no monthly
+             -- history the score was graded against the raw previous period, and
+             -- baseline_clicks is null on any row written before migration 013
+             -- added the column. Reading the column alone would leave a warning
+             -- rule with nothing to measure a decline against, and it would fail
+             -- silently — as no warnings at all.
+             coalesce(s.baseline_clicks, p.previous_clicks) as baseline_clicks,
+             coalesce(p.data_status, 'no_data') as data_status,
+             p.clicks as current_clicks
+      from public.url_performance_score s
+      join public.content_urls c on c.id = s.content_url_id
+      left join public.seo_performance_cache p
+        on p.content_url_id = s.content_url_id and p.range_key = s.range_key
+      where s.range_key = $1 and c.is_active = true`;
+  return db ? (await db.query<ScoreContributionRow>(sql, [rangeKey])).rows : query<ScoreContributionRow>(sql, [rangeKey]);
+}

@@ -14,6 +14,9 @@
     "verify:work-events-db": "node scripts/verify-work-events-db.mjs",
     "verify:review-autosync": "node scripts/verify-review-autosync.mjs",
     "verify:anomaly-baseline": "node scripts/verify-anomaly-baseline.mjs",
+    "verify:warning-audit": "node scripts/verify-warning-audit.mjs",
+    "verify:warning-audit-db": "node scripts/verify-warning-audit-db.mjs",
+    "verify:warning-evaluation": "node --import ./scripts/alias-loader.mjs scripts/verify-warning-evaluation.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
