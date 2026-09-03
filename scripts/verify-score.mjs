@@ -60,7 +60,18 @@ const c2zero = computeUrlScore(
 );
 console.log("   null:", show(c2null));
 console.log("   zero:", show(c2zero));
-check("identical result", JSON.stringify(c2null) === JSON.stringify(c2zero));
+// Compared on the scoring semantics, not on the whole object. The two differ in
+// one field by design: baselineClicks reports what the score was graded against,
+// and "nothing was measured" is honestly null there while a measured zero is 0.
+// That is metadata about provenance, not an input to any number below it.
+const scoring = (r) =>
+  JSON.stringify([r.state, r.clickRatio, r.impressionRatio, r.clickScore, r.impressionScore, r.score, r.weight]);
+check("identical scoring result", scoring(c2null) === scoring(c2zero));
+check(
+  "baseline provenance is still distinguishable",
+  c2null.baselineClicks === null && c2zero.baselineClicks === 0,
+  `null=${c2null.baselineClicks} zero=${c2zero.baselineClicks}`,
+);
 
 // --- Case 3: a real +50% at a large baseline lands on the target -------------
 console.log("\nCase 3 — previous=1000 → current=1500 clicks (+50%, the configured target)");

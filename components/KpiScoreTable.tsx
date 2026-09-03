@@ -1,10 +1,16 @@
 "use client";
 
 import { formatNumber, formatScore } from "@/lib/format";
+import { ScoreAdjustmentBadge, type ScoreAdjustment } from "@/components/ScoreAdjustmentBadge";
+import { LEGACY_FORMULA_VERSION } from "@/lib/performance/score";
 import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
 import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
-export interface KpiScoreTableRow {
+/**
+ * The adjustment fields are optional because the project leaderboard uses this
+ * same component and its rows genuinely do not have them.
+ */
+export interface KpiScoreTableRow extends Partial<ScoreAdjustment> {
   key: string;
   label: string;
   kpi_score: number | null;
@@ -27,7 +33,20 @@ function scoreTone(value: number | null): BadgeTone {
  * the two answer different questions (how much traffic vs how well it grew) and
  * RollupTable already has two callers that should not shift underneath them.
  */
-export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[]; entityLabel: string }) {
+export function KpiScoreTable({
+  rows,
+  entityLabel,
+  showDirectionAdjustment = false,
+}: {
+  rows: KpiScoreTableRow[];
+  entityLabel: string;
+  /**
+   * Members only. An explicit prop rather than sniffing the row shape: the same
+   * component serves the project leaderboard, where the opposite-sign rule does
+   * not apply and must never appear to.
+   */
+  showDirectionAdjustment?: boolean;
+}) {
   const view = useTableView(
     rows,
     [
@@ -80,7 +99,24 @@ export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[];
                     —
                   </span>
                 ) : (
-                  <Badge tone={scoreTone(row.kpi_score)}>{formatScore(row.kpi_score)}</Badge>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Badge tone={scoreTone(row.kpi_score)}>{formatScore(row.kpi_score)}</Badge>
+                    {showDirectionAdjustment && row.direction_adjustment && (
+                      <ScoreAdjustmentBadge
+                        adjustment={{
+                          kpi_score: row.kpi_score,
+                          base_kpi_score: row.base_kpi_score ?? null,
+                          click_component_score: row.click_component_score ?? null,
+                          impression_component_score: row.impression_component_score ?? null,
+                          effective_click_weight: row.effective_click_weight ?? null,
+                          effective_impression_weight: row.effective_impression_weight ?? null,
+                          direction_adjustment: row.direction_adjustment,
+                          opposite_sign_factor: row.opposite_sign_factor ?? null,
+                          formula_version: row.formula_version ?? LEGACY_FORMULA_VERSION,
+                        }}
+                      />
+                    )}
+                  </span>
                 )}
               </td>
               <td className="numeric px-4 py-2.5 text-right text-ink">{row.eligible_url_count}</td>

@@ -1,6 +1,11 @@
 import { withTransaction, type DbExecutor } from "@/lib/db";
 import { attributionIndex, memberKeyOf, ownersOf } from "@/lib/performance/attribution";
-import { urlContributions, type ScoreState, type UrlScoreResult } from "@/lib/performance/score";
+import {
+  LEGACY_FORMULA_VERSION,
+  urlContributions,
+  type ScoreState,
+  type UrlScoreResult,
+} from "@/lib/performance/score";
 import {
   WARNING_RULE_VERSION,
   clickDropPct,
@@ -10,6 +15,7 @@ import {
   type WarningThresholds,
 } from "@/lib/performance/warning";
 import { getUrlAttributionForRange } from "@/lib/repositories/content-url-works";
+import { getMemberScoreFormulaForRange } from "@/lib/repositories/kpi-score-rollups";
 import { getKpiSettings, getWarningSettings } from "@/lib/repositories/kpi-settings";
 import { linkWarningToAudit, openAudit } from "@/lib/repositories/url-kpi-audits";
 import {
@@ -40,22 +46,41 @@ export interface WarningEvaluationResult {
 }
 
 /**
- * The projection urlContributions actually reads. The other fields of a score
- * result are not recomputed here on purpose — this reads what was published, and
- * inventing ratios it did not read would be worse than leaving them null.
+ * The projection urlContributions actually reads, plus the two component scores
+ * the effective blend needs. The remaining fields of a score result are not
+ * recomputed here on purpose — this reads what was published, and inventing
+ * ratios it did not read would be worse than leaving them null.
  */
 function scoreResultOf(row: ScoreContributionRow): UrlScoreResult {
   return {
     state: row.score_state as ScoreState,
     clickRatio: null,
     impressionRatio: null,
-    clickScore: null,
-    impressionScore: null,
+    clickScore: row.click_score === null ? null : Number(row.click_score),
+    impressionScore: row.impression_score === null ? null : Number(row.impression_score),
     score: row.score === null ? null : Number(row.score),
     weight: Number(row.weight ?? 0),
     baselineClicks: row.baseline_clicks,
     baselineImpressions: null,
   };
+}
+
+/**
+ * The score one URL is worth to one member, at the weights that member's own KPI
+ * was taken over.
+ *
+ * Falls back to the published score whenever the components are missing — a row
+ * written before migration 015, or a member with no stored score row yet. That
+ * fallback is exactly the previous behaviour, so a gap in the data degrades to
+ * the old drag figure rather than to a silent zero.
+ */
+function effectiveScoreOf(
+  result: UrlScoreResult,
+  clickWeight: number,
+  impressionWeight: number,
+): number {
+  if (result.clickScore === null || result.impressionScore === null) return result.score ?? 0;
+  return Math.max(0, Math.min(100, clickWeight * result.clickScore + impressionWeight * result.impressionScore));
 }
 
 /**
@@ -93,7 +118,15 @@ async function runEvaluation(
   const kpiSettings = await getKpiSettings(db);
   const priorCounts = await getPriorConsecutiveCounts(evaluationMonth, db);
 
-  const settingsSnapshot = { ...thresholds, urlWeightCapPct: kpiSettings.urlWeightCapPct };
+  // The configured weights go into the snapshot too: every warning now records
+  // both what the settings said and what this member was actually weighed at,
+  // which is the pair a drag figure has to be read against.
+  const settingsSnapshot = {
+    ...thresholds,
+    urlWeightCapPct: kpiSettings.urlWeightCapPct,
+    clickWeight: kpiSettings.clickWeight,
+    impressionWeight: kpiSettings.impressionWeight,
+  };
   const pending: UpsertWarningInput[] = [];
 
   for (const rangeKey of WARNING_RANGES) {
@@ -103,6 +136,8 @@ async function runEvaluation(
         evaluationMonth,
         thresholds,
         urlWeightCapPct: kpiSettings.urlWeightCapPct,
+        clickWeight: kpiSettings.clickWeight,
+        impressionWeight: kpiSettings.impressionWeight,
         settingsSnapshot,
         priorCounts,
       })),
@@ -167,6 +202,8 @@ async function candidatesForRange(
     evaluationMonth: string;
     thresholds: WarningThresholds;
     urlWeightCapPct: number;
+    clickWeight: number;
+    impressionWeight: number;
     settingsSnapshot: Record<string, unknown>;
     priorCounts: Map<string, number>;
   },
@@ -178,6 +215,11 @@ async function candidatesForRange(
   const fallback = computeRangeDates(ctx.rangeKey);
   const startDate = rows[0].start_date ?? fallback.startDate;
   const endDate = rows[0].end_date ?? fallback.endDate;
+
+  // The weights each member's published score was taken over. Read, not
+  // recomputed: this and the score row have to agree, or the drag would not add
+  // back up to the KPI it claims to explain.
+  const formulaByMember = await getMemberScoreFormulaForRange(ctx.rangeKey, db);
 
   const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));
   const byMember = new Map<string, ScoreContributionRow[]>();
@@ -191,9 +233,34 @@ async function candidatesForRange(
 
   const out: UpsertWarningInput[] = [];
   for (const [memberName, memberRows] of byMember) {
+    // A member with no stored score row, or a row from before migration 015,
+    // falls back to the configured weights — which reproduces the previous drag
+    // exactly rather than skipping the member's warnings altogether.
+    const formula = formulaByMember.get(memberName);
+    const effectiveClickWeight = formula?.effective_click_weight ?? ctx.clickWeight;
+    const effectiveImpressionWeight = formula?.effective_impression_weight ?? ctx.impressionWeight;
+    const memberSnapshot = {
+      ...ctx.settingsSnapshot,
+      effective_click_weight: effectiveClickWeight,
+      effective_impression_weight: effectiveImpressionWeight,
+      direction_adjustment: formula?.direction_adjustment ?? "none",
+      opposite_sign_factor: formula?.opposite_sign_factor ?? null,
+      formula_version: formula?.formula_version ?? LEGACY_FORMULA_VERSION,
+      member_kpi_score: formula?.kpi_score ?? null,
+      base_kpi_score: formula?.base_kpi_score ?? null,
+      click_component_score: formula?.click_component_score ?? null,
+      impression_component_score: formula?.impression_component_score ?? null,
+    };
+
     // Exactly the array this member was scored from, so the shares below are the
-    // shares their KPI was actually taken over.
-    const contributions = urlContributions(memberRows.map(scoreResultOf), ctx.urlWeightCapPct);
+    // shares their KPI was actually taken over. Only the score each share is
+    // multiplied by changes with the member's weights; the weights themselves
+    // are the same capped traffic shares as ever.
+    const contributions = urlContributions(
+      memberRows.map(scoreResultOf),
+      ctx.urlWeightCapPct,
+      (result) => effectiveScoreOf(result, effectiveClickWeight, effectiveImpressionWeight),
+    );
     const memberTotalWeight = contributions.reduce((sum, c) => sum + c.cappedWeight, 0);
 
     for (const contribution of contributions) {
@@ -208,6 +275,9 @@ async function candidatesForRange(
         {
           rangeKey: ctx.rangeKey,
           dataStatus: row.data_status,
+          // The ceiling gate stays on the published URL score. It is a statement
+          // about the URL — which has not changed — while the drag below is a
+          // statement about what this URL costs this member.
           score: row.score === null ? null : Number(row.score),
           currentClicks: row.current_clicks,
           baselineClicks: row.baseline_clicks,
@@ -239,6 +309,10 @@ async function candidatesForRange(
           score_state: row.score_state,
           raw_weight: contribution.weight,
           weight_share: contribution.weightShare,
+          url_click_score: row.click_score,
+          url_impression_score: row.impression_score,
+          raw_url_score: contribution.score,
+          effective_url_score: contribution.effectiveScore,
         },
         attributionSnapshot: {
           member_name: memberName,
@@ -246,8 +320,9 @@ async function candidatesForRange(
           owners: ownersOf(index, row).map((owner) => owner.member_name),
           window: { start_date: startDate, end_date: endDate },
         },
-        settingsSnapshot: ctx.settingsSnapshot,
+        settingsSnapshot: memberSnapshot,
         rawScoreSnapshot: row.score === null ? null : Number(row.score),
+        effectiveScoreSnapshot: contribution.effectiveScore,
         cappedWeightSnapshot: contribution.cappedWeight,
         memberTotalWeightSnapshot: memberTotalWeight,
         kpiDragPoints: contribution.dragPoints,

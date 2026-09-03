@@ -5,7 +5,9 @@ import { MetricDelta } from "@/components/MetricDelta";
 import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
 import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 import { formatNumber, formatScore } from "@/lib/format";
+import { ScoreAdjustmentBadge, type ScoreAdjustment } from "@/components/ScoreAdjustmentBadge";
 import {
+  adjustmentOf,
   joinSummaryRows,
   volumeLabel,
   type SummaryRollupRow,
@@ -34,11 +36,14 @@ export function KpiSummaryTable({
   rollups,
   volume,
   entityLabel,
+  showDirectionAdjustment = false,
 }: {
   scores: SummaryScoreRow[];
   rollups: SummaryRollupRow[];
   volume: ContentVolumeRow[];
   entityLabel: string;
+  /** Members only — the project scope is graded on the configured weights, and always was. */
+  showDirectionAdjustment?: boolean;
 }) {
   const rows = useMemo(() => joinSummaryRows(scores, rollups, volume), [scores, rollups, volume]);
   const view = useTableView(
@@ -115,7 +120,16 @@ export function KpiSummaryTable({
                       —
                     </span>
                   ) : (
-                    <Badge tone={scoreTone(row.score.kpi_score)}>{formatScore(row.score.kpi_score)}</Badge>
+                    <span className="inline-flex items-center gap-1.5">
+                      <Badge tone={scoreTone(row.score.kpi_score)}>{formatScore(row.score.kpi_score)}</Badge>
+                      {showDirectionAdjustment && adjustmentOf(row.score) && (
+                        <ScoreAdjustmentBadge
+                          adjustment={adjustmentOf(row.score) as ScoreAdjustment}
+                          clickGrowthPct={row.rollup?.click_growth_pct}
+                          impressionGrowthPct={row.rollup?.impression_growth_pct}
+                        />
+                      )}
+                    </span>
                   )}
                 </td>
                 <td className="numeric px-4 py-2.5 text-right font-medium text-ink">

@@ -20,6 +20,8 @@ export interface UrlKpiWarningRow {
   attribution_snapshot: Record<string, unknown>;
   settings_snapshot: Record<string, unknown>;
   raw_score_snapshot: number | null;
+  /** The score this member's drag was actually taken against, at their effective weights. */
+  effective_score_snapshot: number | null;
   capped_weight_snapshot: number;
   member_total_weight_snapshot: number;
   kpi_drag_points: number;
@@ -50,6 +52,7 @@ export interface UpsertWarningInput {
   attributionSnapshot: unknown;
   settingsSnapshot: unknown;
   rawScoreSnapshot: number | null;
+  effectiveScoreSnapshot: number | null;
   cappedWeightSnapshot: number;
   memberTotalWeightSnapshot: number;
   kpiDragPoints: number;
@@ -104,6 +107,7 @@ export async function bulkUpsertWarnings(inputs: UpsertWarningInput[], db?: DbEx
       attribution_snapshot: input.attributionSnapshot ?? {},
       settings_snapshot: input.settingsSnapshot ?? {},
       raw_score_snapshot: input.rawScoreSnapshot,
+      effective_score_snapshot: input.effectiveScoreSnapshot,
       capped_weight_snapshot: input.cappedWeightSnapshot,
       member_total_weight_snapshot: input.memberTotalWeightSnapshot,
       kpi_drag_points: input.kpiDragPoints,
@@ -112,17 +116,17 @@ export async function bulkUpsertWarnings(inputs: UpsertWarningInput[], db?: DbEx
 
   const sql = `insert into public.url_kpi_warnings
       (content_url_id, member_name, range_key, evaluation_month, start_date, end_date, rule_version, level,
-       metric_snapshot, attribution_snapshot, settings_snapshot, raw_score_snapshot,
+       metric_snapshot, attribution_snapshot, settings_snapshot, raw_score_snapshot, effective_score_snapshot,
        capped_weight_snapshot, member_total_weight_snapshot, kpi_drag_points, consecutive_count)
     select x.content_url_id, x.member_name, x.range_key, x.evaluation_month, x.start_date, x.end_date,
            x.rule_version, x.level, x.metric_snapshot, x.attribution_snapshot, x.settings_snapshot,
-           x.raw_score_snapshot, x.capped_weight_snapshot, x.member_total_weight_snapshot,
+           x.raw_score_snapshot, x.effective_score_snapshot, x.capped_weight_snapshot, x.member_total_weight_snapshot,
            x.kpi_drag_points, x.consecutive_count
     from jsonb_to_recordset($1::jsonb) as x(
       content_url_id uuid, member_name text, range_key text, evaluation_month date,
       start_date date, end_date date, rule_version text, level text,
       metric_snapshot jsonb, attribution_snapshot jsonb, settings_snapshot jsonb,
-      raw_score_snapshot numeric, capped_weight_snapshot numeric,
+      raw_score_snapshot numeric, effective_score_snapshot numeric, capped_weight_snapshot numeric,
       member_total_weight_snapshot numeric, kpi_drag_points numeric, consecutive_count integer
     )
     on conflict (content_url_id, member_name, range_key, evaluation_month, rule_version) do update set
@@ -131,6 +135,7 @@ export async function bulkUpsertWarnings(inputs: UpsertWarningInput[], db?: DbEx
       attribution_snapshot = excluded.attribution_snapshot,
       settings_snapshot = excluded.settings_snapshot,
       raw_score_snapshot = excluded.raw_score_snapshot,
+      effective_score_snapshot = excluded.effective_score_snapshot,
       capped_weight_snapshot = excluded.capped_weight_snapshot,
       member_total_weight_snapshot = excluded.member_total_weight_snapshot,
       kpi_drag_points = excluded.kpi_drag_points,

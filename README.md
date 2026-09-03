@@ -56,6 +56,21 @@ Three things keep the number honest:
 - **Small URLs cannot swing the total.** Aggregation weights by average impressions
   across both periods and caps how much of the total weight any single URL may carry.
 
+The Click/Impression split configured in Settings (70/30 by default) is the **base**
+weighting, and for a URL score and a project score it is also the effective one. A
+**member's** range score is the one place it can differ: when their total click growth
+and total impression growth for that range point in opposite directions, the declining
+metric keeps half its weight (`d = 0.5`) and the pair is renormalized, so 70/30 becomes
+82.35/17.65 when clicks grew and impressions fell, or 53.85/46.15 the other way round.
+The point is to credit the metric a person actually moved instead of averaging their
+one real gain away against the other one's fall. Nothing else changes: same URL set,
+same traffic weights, same per-URL cap, same 0–100 scale with 50 as flat, and same
+score whenever the two move together, either is flat, or either has no comparable
+previous period. Every adjusted row stores the score it would have had
+(`base_kpi_score`), both component scores, both effective weights, the factor and a
+`formula_version`, so the number can always be taken apart. Project scores never
+carry the rule.
+
 `kpi_score` is `null` — never `0` — when a member or project has no eligible URL.
 See `lib/performance/score.ts`. Growth targets, the smoothing constant, weighting, and
 the per-URL cap are Admin-configurable under **Admin → Settings**; **Admin → Overview**

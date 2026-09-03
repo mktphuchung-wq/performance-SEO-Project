@@ -230,6 +230,14 @@ export interface ScoreContributionRow {
   end_date: string;
   score_state: string;
   score: number | null;
+  /**
+   * The two graded halves of the score. Needed because a member whose Click and
+   * Impression moved in opposite directions is weighed at their own effective
+   * weights, so the drag one URL puts on them is not a function of the published
+   * 70/30 score alone.
+   */
+  click_score: number | null;
+  impression_score: number | null;
   weight: number;
   data_status: string;
   current_clicks: number | null;
@@ -252,7 +260,8 @@ export async function getScoreContributionRowsForRange(
 ): Promise<ScoreContributionRow[]> {
   const sql = `select s.content_url_id, c.project, c.member_name, c.member_email, c.url,
              s.start_date, s.end_date,
-             s.score_state, s.score, s.weight, s.baseline_sample_count,
+             s.score_state, s.score, s.click_score, s.impression_score,
+             s.weight, s.baseline_sample_count,
              -- The same fallback computeUrlScore itself applies: with no monthly
              -- history the score was graded against the raw previous period, and
              -- baseline_clicks is null on any row written before migration 013

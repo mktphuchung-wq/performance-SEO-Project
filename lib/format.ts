@@ -243,3 +243,23 @@ export function formatSlaRemaining(deadline: string | null | undefined, resolved
   if (days === 0) return "due today";
   return `${days}d left`;
 }
+
+/**
+ * An effective KPI weight, as a percentage. Two decimals because the whole point
+ * of showing it is that 82.35% and 70.00% are different numbers — one decimal
+ * would round the two opposite-sign cases towards each other.
+ */
+export function formatWeightPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+/**
+ * The Click/Impression weight rebalance, named from the member's point of view.
+ * "none" has no label on purpose — an unadjusted score should say nothing at all
+ * rather than announce that nothing happened.
+ */
+export const DIRECTION_ADJUSTMENT_LABELS: Record<string, string> = {
+  click_up_impression_down: "Click ↑ / Impression ↓",
+  impression_up_click_down: "Impression ↑ / Click ↓",
+};

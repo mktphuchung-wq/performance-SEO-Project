@@ -8,7 +8,10 @@ import type { UrlContribution } from "@/lib/performance/score";
  * rule changes shape, so a re-evaluation writes a new warning beside the old one
  * instead of rewriting history — that pair is what a backtest compares.
  */
-export const WARNING_RULE_VERSION = "warning-v1";
+// v2: KPI drag is measured against each member's effective URL score rather
+// than the published 70/30 one, so a member whose Click and Impression moved in
+// opposite directions sees the drag their own KPI actually carries.
+export const WARNING_RULE_VERSION = "warning-v2";
 
 /** Stamped onto audits and audit events, for the same reason. */
 export const AUDIT_POLICY_VERSION = "audit-policy-v1";

@@ -324,6 +324,67 @@ console.log("\nregression — the KPI must not have moved");
   }
   check("contributions always reconstruct the aggregate kpiScore", reconstructionFailures === 0,
     `${reconstructionFailures} failure(s)`);
+
+  // urlContributions gained an optional score accessor so a member with adjusted
+  // Click/Impression weights can have their drag measured at those weights. Called
+  // without one — which is every caller that existed before — it has to be the
+  // function it was. This is that body, transcribed verbatim, run against the live
+  // one over the same corpus.
+  function urlContributionsBefore(results, urlWeightCapPct) {
+    const indexed = results
+      .map((result, index) => ({ result, index }))
+      .filter((item) => item.result.state === "normal");
+    if (indexed.length === 0) return [];
+
+    const normal = indexed.map((item) => item.result);
+    const rawTotal = normal.reduce((sum, r) => sum + r.weight, 0);
+    const capValue = rawTotal > 0 ? (urlWeightCapPct / 100) * rawTotal : 0;
+    const cappedWeights = normal.map((r) => (capValue > 0 && r.weight > capValue ? capValue : r.weight));
+    const totalWeight = cappedWeights.reduce((a, b) => a + b, 0);
+
+    return indexed.map((item, position) => {
+      const score = item.result.score ?? 0;
+      const cappedWeight = cappedWeights[position];
+      const weightShare = totalWeight > 0 ? cappedWeight / totalWeight : 1 / indexed.length;
+      return {
+        index: item.index,
+        score,
+        weight: item.result.weight,
+        cappedWeight,
+        weightShare,
+        dragPoints: Math.max(0, 50 - score) * weightShare,
+      };
+    });
+  }
+
+  let contributionMismatches = 0;
+  for (const [results, cap] of [...fixed, ...random]) {
+    // effectiveScore is the one field the new signature added; everything else
+    // has to match the old shape exactly, key order included.
+    const got = urlContributions(results, cap).map((c) => ({
+      index: c.index, score: c.score, weight: c.weight,
+      cappedWeight: c.cappedWeight, weightShare: c.weightShare, dragPoints: c.dragPoints,
+    }));
+    const want = urlContributionsBefore(results, cap);
+    if (JSON.stringify(got) !== JSON.stringify(want)) contributionMismatches += 1;
+  }
+  check(
+    `urlContributions with no accessor is identical to its pre-change self over ${fixed.length + random.length} cases`,
+    contributionMismatches === 0,
+    `${contributionMismatches} mismatch(es)`,
+  );
+
+  // And with an accessor, the drag has to follow the score it was handed —
+  // otherwise a member with adjusted weights would be told a URL costs them
+  // points their own KPI never lost.
+  let accessorFailures = 0;
+  for (const [results, cap] of random) {
+    for (const c of urlContributions(results, cap, (r) => Math.min(100, (r.score ?? 0) + 10))) {
+      if (!near(c.effectiveScore, Math.min(100, c.score + 10), 1e-12)) accessorFailures += 1;
+      if (!near(c.dragPoints, Math.max(0, 50 - c.effectiveScore) * c.weightShare, 1e-12)) accessorFailures += 1;
+    }
+  }
+  check("an accessor changes the drag and nothing else", accessorFailures === 0, `${accessorFailures} failure(s)`);
 }
 
 console.log(failures === 0 ? "\nAll warning/audit checks passed." : `\n${failures} check(s) failed.`);

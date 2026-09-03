@@ -14,10 +14,15 @@
     "verify:work-events-db": "node scripts/verify-work-events-db.mjs",
     "verify:review-autosync": "node scripts/verify-review-autosync.mjs",
     "verify:anomaly-baseline": "node scripts/verify-anomaly-baseline.mjs",
+    "verify:score": "node scripts/verify-score.mjs",
+    "verify:member-score": "node scripts/verify-member-score.mjs",
+    "verify:member-score-db": "node scripts/verify-member-score-db.mjs",
     "verify:warning-audit": "node scripts/verify-warning-audit.mjs",
     "verify:warning-audit-db": "node scripts/verify-warning-audit-db.mjs",
     "verify:warning-evaluation": "node --import ./scripts/alias-loader.mjs scripts/verify-warning-evaluation.mjs",
     "verify:table-view": "node --no-warnings --experimental-strip-types scripts/verify-table-view.mjs",
+    "report:kpi-shift": "node --import ./scripts/alias-loader.mjs scripts/report-kpi-shift.mjs",
+    "verify:kpi": "npm run verify:score && npm run verify:member-score && npm run verify:warning-audit",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

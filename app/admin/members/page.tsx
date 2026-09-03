@@ -80,6 +80,7 @@ export default function AdminMembersPage() {
           !scoreError && (
             <KpiScoreTable
               entityLabel="Member"
+              showDirectionAdjustment
               rows={scores.map((row) => ({ ...row, key: row.member_name, label: row.member_name }))}
             />
           )

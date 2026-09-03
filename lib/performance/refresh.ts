@@ -17,7 +17,14 @@ import { classifyGoogleApiError, isWideQueryUnsupported } from "@/lib/google-err
 import { attributionIndex, groupByMemberAndProject } from "@/lib/performance/attribution";
 import { computeGrowth, type PeriodMetrics } from "@/lib/performance/growth";
 import { evaluateWarningsForClosedMonth } from "@/lib/performance/warning-evaluation";
-import { aggregateScore, computeUrlScore, robustBaseline } from "@/lib/performance/score";
+import { periodTotals } from "@/lib/performance/period-totals";
+import {
+  OPPOSITE_SIGN_FACTOR,
+  aggregateMemberScore,
+  aggregateScore,
+  computeUrlScore,
+  robustBaseline,
+} from "@/lib/performance/score";
 import {
   getMonthlyHistoryForUrls,
   isBaselineEligible,
@@ -470,9 +477,31 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
   const index = attributionIndex(await getUrlAttributionForRange(startDate, endDate, db));
   const { byMember, memberEmails, byProject } = groupByMemberAndProject(scored, index, (item) => item.row);
   for (const [memberName, items] of byMember) {
+    // The direction is taken from the very rows this run just scored, not from
+    // member_performance_rollup: that table is written by a different function,
+    // and the recompute endpoint does not run it at all — reading it back would
+    // let a member be adjusted on a percentage from an older snapshot.
+    const totals = periodTotals(items.map(({ row }) => ({
+      dataStatus: row.data_status,
+      clicks: row.current_clicks,
+      impressions: row.current_impressions,
+      previousClicks: row.previous_clicks,
+      previousImpressions: row.previous_impressions,
+    })));
     await upsertMemberScore(
       memberEmails.get(memberName) ?? null,
-      { key: memberName, rangeKey, startDate, endDate, ...aggregateScore(items.map((item) => item.result), settings.urlWeightCapPct) },
+      {
+        key: memberName,
+        rangeKey,
+        startDate,
+        endDate,
+        ...aggregateMemberScore(
+          items.map((item) => item.result),
+          settings,
+          { clickGrowthPct: totals.clickGrowthPct, impressionGrowthPct: totals.impressionGrowthPct },
+          OPPOSITE_SIGN_FACTOR,
+        ),
+      },
       db,
     );
   }
@@ -484,25 +513,30 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
   }
 }
 
-function growthPct(previous: number | null, current: number): number | null {
-  if (previous === null) return null;
-  if (previous === 0) return current > 0 ? 100 : null;
-  return ((current - previous) / previous) * 100;
-}
-
+/**
+ * One rollup row's worth of numbers.
+ *
+ * The click/impression totals and their growth percentages come from the shared
+ * periodTotals helper rather than being summed here, so the percentage this
+ * table stores and the percentage the member score reads the sign of are the
+ * same arithmetic over the same rows. What stays local is what only a rollup
+ * has: CTR, average position, and the growth_status tallies.
+ */
 function summarize(rows: Array<{
   clicks: number | null; impressions: number | null; ctr: number | null; position: number | null;
   previous_clicks: number | null; previous_impressions: number | null; growth_status: string; data_status: string;
 }>) {
   const okRows = rows.filter((row) => row.data_status === "ok");
-  const clicks = okRows.reduce((sum, row) => sum + Number(row.clicks ?? 0), 0);
-  const impressions = okRows.reduce((sum, row) => sum + Number(row.impressions ?? 0), 0);
-  const ctr = impressions > 0 ? clicks / impressions : 0;
+  const totals = periodTotals(rows.map((row) => ({
+    dataStatus: row.data_status,
+    clicks: row.clicks,
+    impressions: row.impressions,
+    previousClicks: row.previous_clicks,
+    previousImpressions: row.previous_impressions,
+  })));
+  const ctr = totals.impressions > 0 ? totals.clicks / totals.impressions : 0;
   const positionRows = okRows.filter((row) => row.position !== null);
   const position = positionRows.length ? positionRows.reduce((sum, row) => sum + Number(row.position ?? 0), 0) / positionRows.length : null;
-  const hasPrevious = okRows.some((row) => row.previous_clicks !== null || row.previous_impressions !== null);
-  const previousClicks = hasPrevious ? okRows.reduce((sum, row) => sum + Number(row.previous_clicks ?? 0), 0) : null;
-  const previousImpressions = hasPrevious ? okRows.reduce((sum, row) => sum + Number(row.previous_impressions ?? 0), 0) : null;
   return {
     urlCount: rows.length,
     urlsWithData: okRows.length,
@@ -510,15 +544,15 @@ function summarize(rows: Array<{
     stableUrls: rows.filter((row) => row.growth_status === "stable").length,
     decliningUrls: rows.filter((row) => row.growth_status === "declining").length,
     noDataUrls: rows.filter((row) => row.data_status !== "ok").length,
-    clicks,
-    impressions,
+    clicks: totals.clicks,
+    impressions: totals.impressions,
     ctr,
     position,
-    previousClicks,
-    previousImpressions,
-    clickDelta: previousClicks === null ? null : clicks - previousClicks,
-    clickGrowthPct: growthPct(previousClicks, clicks),
-    impressionDelta: previousImpressions === null ? null : impressions - previousImpressions,
-    impressionGrowthPct: growthPct(previousImpressions, impressions),
+    previousClicks: totals.previousClicks,
+    previousImpressions: totals.previousImpressions,
+    clickDelta: totals.clickDelta,
+    clickGrowthPct: totals.clickGrowthPct,
+    impressionDelta: totals.impressionDelta,
+    impressionGrowthPct: totals.impressionGrowthPct,
   };
 }

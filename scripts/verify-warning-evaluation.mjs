@@ -36,11 +36,15 @@ const check = (label, ok, detail = "") => {
 async function kpiFingerprint() {
   const members = await query(
     `select member_name, range_key, kpi_score, eligible_url_count, excluded_url_count,
-            no_data_url_count, capped_url_count, total_weight
+            no_data_url_count, capped_url_count, total_weight,
+            base_kpi_score, click_component_score, impression_component_score,
+            effective_click_weight, effective_impression_weight,
+            direction_adjustment, opposite_sign_factor, formula_version
        from public.member_performance_score order by member_name, range_key`,
   );
   const urls = await query(
-    `select content_url_id, range_key, score_state, score, weight, baseline_clicks, baseline_impressions
+    `select content_url_id, range_key, score_state, score, click_score, impression_score,
+            weight, baseline_clicks, baseline_impressions
        from public.url_performance_score order by content_url_id, range_key`,
   );
   const official = new Map();

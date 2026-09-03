@@ -224,6 +224,7 @@ export default function AdminKpiPage() {
             rollups={data.rollups}
             volume={data.volume}
             entityLabel={entityLabel}
+            showDirectionAdjustment={scope === "member"}
           />
         )}
       </Card>

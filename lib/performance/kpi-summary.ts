@@ -1,5 +1,5 @@
 import type { ContentVolumeRow } from "@/lib/repositories/content-volume";
-import type { MemberScoreRow, ProjectScoreRow } from "@/lib/repositories/kpi-score-rollups";
+import type { MemberScoreAdjustment, MemberScoreRow, ProjectScoreRow } from "@/lib/repositories/kpi-score-rollups";
 import type { MemberRollupRow, ProjectRollupRow } from "@/lib/repositories/rollups";
 
 export type SummaryScoreRow = MemberScoreRow | ProjectScoreRow;
@@ -92,4 +92,17 @@ export function volumeLabel(row: KpiSummaryRow): string {
   if (row.volumeParts.length < 2) return String(row.volumeTotal);
   const parts = row.volumeParts.map((p) => `${p.url_count} ${p.work_type}`).join(" · ");
   return `${row.volumeTotal} (${parts})`;
+}
+
+/**
+ * The adjustment fields, but only on a row that has them.
+ *
+ * Score rows arrive as a member/project union, and only member rows carry the
+ * opposite-sign columns. Narrowing on the presence of direction_adjustment is
+ * what keeps the project scope from ever rendering a rule that does not apply to
+ * it — the type is the guard, not a prop somebody has to remember to unset.
+ */
+export function adjustmentOf(row: SummaryScoreRow | null): (MemberScoreAdjustment & { kpi_score: number | null }) | null {
+  if (!row || !("direction_adjustment" in row)) return null;
+  return row;
 }

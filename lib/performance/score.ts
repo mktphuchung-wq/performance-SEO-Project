@@ -237,12 +237,20 @@ function cappedWeightsOf(
 export interface UrlContribution {
   /** Index into the results array that was passed in, so the caller can rejoin its own row. */
   index: number;
+  /** The published URL score — the 70/30 blend everyone sees on the dashboard. */
   score: number;
+  /**
+   * The score this URL was actually weighed at for the caller's grain. Equal to
+   * `score` unless a scoreOf accessor was supplied, which is how a member whose
+   * Click and Impression moved in opposite directions gets drag measured against
+   * the same weights their own KPI was taken over.
+   */
+  effectiveScore: number;
   weight: number;
   cappedWeight: number;
   /** 0–1 — the fraction of the member's aggregate this URL actually carries. */
   weightShare: number;
-  /** max(0, 50 - score) × weightShare: points this URL takes off the member's range score. */
+  /** max(0, 50 - effectiveScore) × weightShare: points this URL takes off the member's range score. */
   dragPoints: number;
 }
 
@@ -262,8 +270,18 @@ export interface UrlContribution {
  *
  * Only "normal" URLs appear. Excluded and no-data URLs have no score and no
  * weight, so they cannot drag anything.
+ *
+ * scoreOf overrides which number the drag is measured from — never the weights.
+ * A member with an opposite-sign adjustment reads each URL at their own
+ * effective weights, but is still weighed over the same capped shares, so the
+ * drag figures keep summing back to the KPI they claim to explain. Omitted, this
+ * is byte-for-byte the function it replaced.
  */
-export function urlContributions(results: UrlScoreResult[], urlWeightCapPct: number): UrlContribution[] {
+export function urlContributions(
+  results: UrlScoreResult[],
+  urlWeightCapPct: number,
+  scoreOf?: (result: UrlScoreResult) => number,
+): UrlContribution[] {
   const indexed = results
     .map((result, index) => ({ result, index }))
     .filter((item) => item.result.state === "normal");
@@ -276,15 +294,17 @@ export function urlContributions(results: UrlScoreResult[], urlWeightCapPct: num
 
   return indexed.map((item, position) => {
     const score = item.result.score ?? 0;
+    const effectiveScore = scoreOf ? scoreOf(item.result) : score;
     const cappedWeight = cappedWeights[position];
     const weightShare = totalWeight > 0 ? cappedWeight / totalWeight : 1 / indexed.length;
     return {
       index: item.index,
       score,
+      effectiveScore,
       weight: item.result.weight,
       cappedWeight,
       weightShare,
-      dragPoints: Math.max(0, NEUTRAL_SCORE - score) * weightShare,
+      dragPoints: Math.max(0, NEUTRAL_SCORE - effectiveScore) * weightShare,
     };
   });
 }
@@ -325,5 +345,183 @@ export function aggregateScore(results: UrlScoreResult[], urlWeightCapPct: numbe
     ...counts,
     cappedUrlCount,
     totalWeight,
+  };
+}
+
+/**
+ * Which of the two metrics, if either, is being asked to carry less weight.
+ *
+ * "none" is the overwhelmingly common answer and means the member is scored
+ * exactly the way they always were.
+ */
+export type DirectionAdjustment = "none" | "click_up_impression_down" | "impression_up_click_down";
+
+/** Stamped on every member score row so a number can be traced to the rule that produced it. */
+export const MEMBER_FORMULA_VERSION = "member-opposite-sign-v1";
+
+/** What rows written before this rule existed are stamped with by the migration. */
+export const LEGACY_FORMULA_VERSION = "legacy";
+
+/**
+ * d — how much of its weight the declining metric keeps before renormalizing.
+ *
+ * A constant rather than a setting on purpose: changing it changes what a KPI
+ * score means, so it should move together with MEMBER_FORMULA_VERSION and a
+ * backtest, not quietly from a settings form. It is still passed in as a
+ * parameter, so promoting it to kpi_settings later is a one-line change.
+ */
+export const OPPOSITE_SIGN_FACTOR = 0.5;
+
+export interface GrowthDirection {
+  clickGrowthPct: number | null;
+  impressionGrowthPct: number | null;
+}
+
+export interface EffectiveWeights {
+  clickWeight: number;
+  impressionWeight: number;
+}
+
+export interface MemberScoreAggregate extends ScoreAggregate {
+  /** The 70/30 score, before any direction rule. Identical to what aggregateScore returns. */
+  baseKpiScore: number | null;
+  clickComponentScore: number | null;
+  impressionComponentScore: number | null;
+  effectiveClickWeight: number | null;
+  effectiveImpressionWeight: number | null;
+  directionAdjustment: DirectionAdjustment;
+  /** The d actually applied. Null when nothing was adjusted, so the column reads as evidence. */
+  oppositeSignFactor: number | null;
+  formulaVersion: string;
+}
+
+/**
+ * Are the member's two totals moving against each other?
+ *
+ * Zero and null are deliberately not opposite signs. A metric that did not move,
+ * or that has no comparable previous period, is not evidence that the other one
+ * deserves more say — and growthPct already reports "flat from nothing" as null
+ * rather than as 0. Percentages are compared unrounded: the sign is the whole
+ * question, and rounding is a display concern.
+ */
+export function directionAdjustmentOf(growth: GrowthDirection): DirectionAdjustment {
+  const click = growth.clickGrowthPct;
+  const impression = growth.impressionGrowthPct;
+  if (click === null || impression === null) return "none";
+  if (!Number.isFinite(click) || !Number.isFinite(impression)) return "none";
+  if (click > 0 && impression < 0) return "click_up_impression_down";
+  if (click < 0 && impression > 0) return "impression_up_click_down";
+  return "none";
+}
+
+/**
+ * The weights one member is actually scored at, normalized to sum to 1.
+ *
+ * Only the declining side is scaled down; the growing side keeps its configured
+ * weight and then simply takes up the slack the renormalization frees. That is
+ * what makes the growing metric matter more without inventing a bonus.
+ */
+export function effectiveWeightsFor(
+  settings: Pick<KpiSettings, "clickWeight" | "impressionWeight">,
+  direction: DirectionAdjustment,
+  factor: number,
+): EffectiveWeights {
+  const rawClick = direction === "impression_up_click_down" ? settings.clickWeight * factor : settings.clickWeight;
+  const rawImpression = direction === "click_up_impression_down" ? settings.impressionWeight * factor : settings.impressionWeight;
+  const total = rawClick + rawImpression;
+
+  // Both weights at zero is a misconfiguration the settings API rejects, but a
+  // division by it would put NaN in a KPI score rather than fail loudly.
+  if (!(total > 0)) return { clickWeight: settings.clickWeight, impressionWeight: settings.impressionWeight };
+
+  return { clickWeight: rawClick / total, impressionWeight: rawImpression / total };
+}
+
+/** The weighted mean of one component over the same capped weights the aggregate uses. */
+function componentMeanOf(
+  normal: UrlScoreResult[],
+  cappedWeights: number[],
+  totalWeight: number,
+  pick: (result: UrlScoreResult) => number | null,
+): number {
+  const mean =
+    totalWeight > 0
+      ? normal.reduce((sum, r, i) => sum + (pick(r) ?? 0) * cappedWeights[i], 0) / totalWeight
+      : // Same fallback aggregateScore applies when no URL has traffic to rank by.
+        normal.reduce((sum, r) => sum + (pick(r) ?? 0), 0) / normal.length;
+  return Math.max(0, Math.min(100, mean));
+}
+
+/**
+ * A member's range score, with the Click/Impression weights re-balanced when
+ * their two totals moved in opposite directions.
+ *
+ * Members only. A project's score stays on the configured weights — the rule is
+ * about crediting a person for the metric they moved, not about re-describing a
+ * project's traffic.
+ *
+ * baseKpiScore is aggregateScore's own output, not a re-derivation of it: the
+ * one number that must not move is taken from the function that has always
+ * produced it, so "the base score is unchanged" is true by construction rather
+ * than by an algebraic identity that a future edit could quietly break. The
+ * identity (wc·C + wi·I equals that mean, because the per-URL score is the same
+ * linear blend over the same weights) still holds, and the verify script asserts
+ * it — but nothing in production depends on it.
+ *
+ * When there is nothing to adjust the base score is returned unchanged rather
+ * than re-normalized through weights that would sum to 1 anyway. That keeps
+ * same-sign, zero and null members bit-identical to the previous formula no
+ * matter what the settings say.
+ */
+export function aggregateMemberScore(
+  results: UrlScoreResult[],
+  settings: KpiSettings,
+  growth: GrowthDirection,
+  factor: number = OPPOSITE_SIGN_FACTOR,
+): MemberScoreAggregate {
+  const base = aggregateScore(results, settings.urlWeightCapPct);
+  const directionAdjustment = directionAdjustmentOf(growth);
+  const weights = effectiveWeightsFor(settings, directionAdjustment, factor);
+  const shared = {
+    effectiveClickWeight: weights.clickWeight,
+    effectiveImpressionWeight: weights.impressionWeight,
+    directionAdjustment,
+    oppositeSignFactor: directionAdjustment === "none" ? null : factor,
+    formulaVersion: MEMBER_FORMULA_VERSION,
+  };
+
+  // No eligible URL: no score, and no components to explain one with. The
+  // weights are still recorded — they are what this member would have been
+  // scored at, and an auditable row beats a row of nulls.
+  if (base.kpiScore === null) {
+    return {
+      ...base,
+      baseKpiScore: null,
+      clickComponentScore: null,
+      impressionComponentScore: null,
+      ...shared,
+    };
+  }
+
+  const normal = results.filter((r) => r.state === "normal");
+  const { cappedWeights, totalWeight } = cappedWeightsOf(normal, settings.urlWeightCapPct);
+  const clickComponentScore = componentMeanOf(normal, cappedWeights, totalWeight, (r) => r.clickScore);
+  const impressionComponentScore = componentMeanOf(normal, cappedWeights, totalWeight, (r) => r.impressionScore);
+
+  const kpiScore =
+    directionAdjustment === "none"
+      ? base.kpiScore
+      : Math.max(
+          0,
+          Math.min(100, weights.clickWeight * clickComponentScore + weights.impressionWeight * impressionComponentScore),
+        );
+
+  return {
+    ...base,
+    kpiScore,
+    baseKpiScore: base.kpiScore,
+    clickComponentScore,
+    impressionComponentScore,
+    ...shared,
   };
 }
