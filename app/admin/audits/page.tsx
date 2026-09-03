@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuditDetailPanel } from "@/components/AuditDetailPanel";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 import { StatCard } from "@/components/StatCard";
 import { Badge, Button, Card, CardHeader, EmptyState, PageHeader } from "@/components/ui";
 import {
@@ -64,6 +65,35 @@ export default function AuditsPage() {
   const [evaluating, setEvaluating] = useState(false);
   const [evaluationNote, setEvaluationNote] = useState<{ text: string; failed: boolean } | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
+  const warningView = useTableView(
+    warnings,
+    [
+      { id: "url", label: "URL", value: (row) => row.url },
+      { id: "project", label: "Project", value: (row) => row.project, groupable: true },
+      { id: "member", label: "Member", value: (row) => row.member_name, groupable: true },
+      { id: "range", label: "Range", value: (row) => RANGE_SHORT_LABELS[row.range_key] ?? row.range_key, groupable: true },
+      { id: "month", label: "Month", value: (row) => row.evaluation_month, type: "date", groupable: true, groupLabel: (value) => formatMonth(String(value)) },
+      { id: "level", label: "Level", value: (row) => WARNING_LEVEL_LABELS[row.level] ?? row.level, groupable: true },
+      { id: "score", label: "Score", value: (row) => row.raw_score_snapshot, type: "number" },
+      { id: "drop", label: "Click drop", value: (row) => row.metric_snapshot?.click_drop_pct, type: "number" },
+      { id: "drag", label: "KPI drag", value: (row) => row.kpi_drag_points, type: "number" },
+      { id: "audit", label: "Audit status", value: (row) => row.audit_status ? (AUDIT_STATUS_LABELS[row.audit_status] ?? row.audit_status) : row.resolution ? (WARNING_RESOLUTION_LABELS[row.resolution] ?? row.resolution) : "Monitoring", groupable: true },
+    ],
+    { initialSort: { column: "drag", direction: "desc" } },
+  );
+  const auditView = useTableView(
+    audits,
+    [
+      { id: "url", label: "URL", value: (row) => row.url },
+      { id: "project", label: "Project", value: (row) => row.project, groupable: true },
+      { id: "members", label: "Members", value: (row) => row.affected_members, groupable: true },
+      { id: "status", label: "Status", value: (row) => AUDIT_STATUS_LABELS[row.status] ?? row.status, groupable: true },
+      { id: "drag", label: "Worst drag", value: (row) => row.max_kpi_drag_points, type: "number" },
+      { id: "deadline", label: "SLA deadline", value: (row) => row.sla_deadline, type: "date" },
+      { id: "sla", label: "SLA state", value: (row) => slaBreached(row.sla_deadline, row.resolved_at) ? "Past SLA" : "Within SLA", groupable: true },
+    ],
+    { initialSort: { column: "drag", direction: "desc" } },
+  );
 
   const reload = useCallback(() => setDataVersion((v) => v + 1), []);
 
@@ -199,7 +229,9 @@ export default function AuditsPage() {
           ) : warnings.length === 0 ? (
             <EmptyState title="No open warnings" hint="Run an evaluation after a refresh, or widen the month filter." />
           ) : (
-            <div className="overflow-x-auto">
+            <div>
+              <TableViewControls view={warningView} noun="warnings" />
+              <TableViewport view={warningView}>
               <table className="w-full min-w-[980px] text-sm">
                 <thead>
                   <tr className="border-b border-line bg-neutral-soft/60 text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -214,8 +246,10 @@ export default function AuditsPage() {
                     <th className="px-4 py-2.5 text-left">Audit</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {warnings.map((row) => (
+                <TableViewBody
+                  view={warningView}
+                  colSpan={9}
+                  renderRow={(row) => (
                     <tr key={row.id} className="border-b border-line last:border-0 hover:bg-neutral-soft/50">
                       <td className="max-w-[280px] px-4 py-2.5">
                         <Link
@@ -267,9 +301,10 @@ export default function AuditsPage() {
                         )}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
+                  )}
+                />
               </table>
+              </TableViewport>
             </div>
           )}
         </Card>
@@ -285,7 +320,9 @@ export default function AuditsPage() {
             ) : audits.length === 0 ? (
               <EmptyState title="No open audits" hint="Mandatory-audit warnings open a case automatically." />
             ) : (
-              <div className="overflow-x-auto">
+              <div>
+                <TableViewControls view={auditView} noun="audits" />
+                <TableViewport view={auditView}>
                 <table className="w-full min-w-[860px] text-sm">
                   <thead>
                     <tr className="border-b border-line bg-neutral-soft/60 text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -297,8 +334,10 @@ export default function AuditsPage() {
                       <th className="px-4 py-2.5" />
                     </tr>
                   </thead>
-                  <tbody>
-                    {audits.map((row) => {
+                  <TableViewBody
+                    view={auditView}
+                    colSpan={6}
+                    renderRow={(row) => {
                       const late = slaBreached(row.sla_deadline, row.resolved_at);
                       return (
                         <tr
@@ -342,9 +381,10 @@ export default function AuditsPage() {
                           </td>
                         </tr>
                       );
-                    })}
-                  </tbody>
+                    }}
+                  />
                 </table>
+                </TableViewport>
               </div>
             )}
           </Card>

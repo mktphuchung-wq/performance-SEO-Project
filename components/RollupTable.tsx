@@ -3,6 +3,7 @@
 import { formatCtr, formatNumber, formatPosition } from "@/lib/format";
 import { MetricDelta } from "@/components/MetricDelta";
 import { EmptyState } from "@/components/ui";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 export interface RollupTableRow {
   key: string;
@@ -29,6 +30,24 @@ export interface RollupTableRow {
  * in the label of the first column.
  */
 export function RollupTable({ rows, entityLabel }: { rows: RollupTableRow[]; entityLabel: string }) {
+  const view = useTableView(
+    rows,
+    [
+      { id: "label", label: entityLabel, value: (row) => row.label, groupable: true },
+      { id: "url_count", label: "URLs", value: (row) => row.url_count, type: "number" },
+      { id: "clicks", label: "Clicks", value: (row) => row.clicks, type: "number" },
+      { id: "click_delta", label: "Δ Clicks", value: (row) => row.click_delta, type: "number" },
+      { id: "impressions", label: "Impressions", value: (row) => row.impressions, type: "number" },
+      { id: "impression_delta", label: "Δ Impressions", value: (row) => row.impression_delta, type: "number" },
+      { id: "ctr", label: "CTR", value: (row) => row.ctr, type: "number" },
+      { id: "position", label: "Avg position", value: (row) => row.position, type: "number" },
+      { id: "growing", label: "Growing", value: (row) => row.growing_urls, type: "number" },
+      { id: "declining", label: "Declining", value: (row) => row.declining_urls, type: "number" },
+      { id: "no_data", label: "No data", value: (row) => row.no_data_urls, type: "number" },
+    ],
+    { initialSort: { column: "clicks", direction: "desc" } },
+  );
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -39,11 +58,13 @@ export function RollupTable({ rows, entityLabel }: { rows: RollupTableRow[]; ent
   }
 
   // Bar width is relative to the busiest row, so the ranking is readable at a glance.
-  const maxClicks = Math.max(...rows.map((r) => Number(r.clicks ?? 0)), 1);
+  const maxClicks = Math.max(...view.visibleRows.map((r) => Number(r.clicks ?? 0)), 1);
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[1040px] text-sm">
+    <div>
+      <TableViewControls view={view} noun={entityLabel.toLowerCase()} />
+      <TableViewport view={view}>
+        <table className="w-full min-w-[1040px] text-sm">
         <thead>
           <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
             <th className="px-4 py-2.5">{entityLabel}</th>
@@ -60,8 +81,10 @@ export function RollupTable({ rows, entityLabel }: { rows: RollupTableRow[]; ent
             <th className="px-4 py-2.5 text-right">No data</th>
           </tr>
         </thead>
-        <tbody>
-          {rows.map((row) => (
+        <TableViewBody
+          view={view}
+          colSpan={12}
+          renderRow={(row) => (
             <tr key={row.key} className="border-b border-line last:border-0 hover:bg-neutral-soft/50">
               <td className="px-4 py-2.5 font-medium text-ink">{row.label}</td>
               <td className="numeric px-4 py-2.5 text-right text-ink-muted">
@@ -94,9 +117,10 @@ export function RollupTable({ rows, entityLabel }: { rows: RollupTableRow[]; ent
               <td className="numeric px-4 py-2.5 text-right text-negative">{row.declining_urls}</td>
               <td className="numeric px-4 py-2.5 text-right text-ink-subtle">{row.no_data_urls}</td>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          )}
+        />
+        </table>
+      </TableViewport>
     </div>
   );
 }

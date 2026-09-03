@@ -7,11 +7,17 @@ import { SELECTABLE_RANGE_KEYS } from "@/lib/ranges";
 import type { SyncRun } from "@/lib/repositories/sync-runs";
 import type { RefreshRun } from "@/lib/repositories/refresh-runs";
 import type { RangeFreshness } from "@/lib/repositories/performance-cache";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 interface RunsResponse {
   syncRuns: SyncRun[];
   refreshRuns: RefreshRun[];
   freshness: RangeFreshness[];
+}
+
+interface FreshnessTableRow {
+  rangeKey: string;
+  freshness: RangeFreshness | undefined;
 }
 
 const statusTone: Record<string, BadgeTone> = {
@@ -48,9 +54,25 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
       .catch(() => setData(null));
   }, [refreshKey]);
 
-  if (!data) return null;
+  const freshnessByRange = new Map((data?.freshness ?? []).map((row) => [row.range_key, row]));
+  const freshnessRows: FreshnessTableRow[] = SELECTABLE_RANGE_KEYS.map((rangeKey) => ({
+    rangeKey,
+    freshness: freshnessByRange.get(rangeKey),
+  }));
+  const view = useTableView(
+    freshnessRows,
+    [
+      { id: "range", label: "Range", value: (row) => RANGE_LABELS[row.rangeKey] ?? row.rangeKey, groupable: true },
+      { id: "start", label: "Window start", value: (row) => row.freshness?.start_date, type: "date" },
+      { id: "cached", label: "URLs cached", value: (row) => row.freshness?.cached_urls, type: "number" },
+      { id: "data", label: "With data", value: (row) => row.freshness?.ok_urls, type: "number" },
+      { id: "errors", label: "Errors", value: (row) => row.freshness?.error_urls, type: "number" },
+      { id: "refreshed", label: "Last refreshed", value: (row) => row.freshness?.refreshed_at, type: "date" },
+    ],
+    { initialSort: { column: "range", direction: "asc" } },
+  );
 
-  const freshnessByRange = new Map(data.freshness.map((f) => [f.range_key, f]));
+  if (!data) return null;
 
   return (
     <div className="space-y-6">
@@ -59,7 +81,9 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
           title="Cached data by range"
           description="The dashboard reads these cached rows, not Google directly — they survive a reload and only change when you refresh."
         />
-        <div className="overflow-x-auto">
+        <div>
+          <TableViewControls view={view} noun="ranges" />
+          <TableViewport view={view}>
           <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -71,9 +95,10 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
                 <th className="px-4 py-2.5">Last refreshed</th>
               </tr>
             </thead>
-            <tbody>
-              {SELECTABLE_RANGE_KEYS.map((rangeKey) => {
-                const row = freshnessByRange.get(rangeKey);
+            <TableViewBody
+              view={view}
+              colSpan={6}
+              renderRow={({ rangeKey, freshness: row }) => {
                 return (
                   <tr key={rangeKey} className="border-b border-line last:border-0">
                     <td className="px-4 py-2.5 font-medium text-ink">{RANGE_LABELS[rangeKey] ?? rangeKey}</td>
@@ -102,9 +127,10 @@ export function RunHistoryPanel({ refreshKey }: { refreshKey?: number }) {
                     </td>
                   </tr>
                 );
-              })}
-            </tbody>
+              }}
+            />
           </table>
+          </TableViewport>
         </div>
       </Card>
 

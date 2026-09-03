@@ -11,6 +11,7 @@ import {
 } from "@/lib/format";
 import { MetricDelta } from "@/components/MetricDelta";
 import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 export interface PerformanceTableRow {
   content_url_id: string;
@@ -76,6 +77,36 @@ export function PerformanceTable({
    */
   warningLevelByUrlId?: Record<string, string>;
 }) {
+  const view = useTableView(
+    rows,
+    [
+      { id: "url", label: "URL", value: (row) => row.url },
+      { id: "project", label: "Project", value: (row) => row.project, groupable: true },
+      ...(showMember
+        ? [{ id: "member", label: "Member", value: (row: PerformanceTableRow) => row.member_name, groupable: true }]
+        : []),
+      { id: "type", label: "Type", value: (row) => row.work_type, groupable: true },
+      { id: "first_worked", label: "First worked", value: (row) => row.first_worked_at, type: "date" as const },
+      { id: "last_worked", label: "Last worked", value: (row) => row.worked_at, type: "date" as const },
+      { id: "clicks", label: "Clicks", value: (row) => row.clicks, type: "number" as const },
+      { id: "click_delta", label: "Δ Clicks", value: (row) => row.click_delta, type: "number" as const },
+      { id: "impressions", label: "Impressions", value: (row) => row.impressions, type: "number" as const },
+      { id: "impression_delta", label: "Δ Impressions", value: (row) => row.impression_delta, type: "number" as const },
+      { id: "ctr", label: "CTR", value: (row) => row.ctr, type: "number" as const },
+      { id: "position", label: "Avg position", value: (row) => row.position, type: "number" as const },
+      { id: "status", label: "Status", value: (row) => DATA_STATUS_LABELS[row.data_status] ?? row.data_status, groupable: true },
+      ...(onToggleKpiExclusion
+        ? [{
+            id: "kpi",
+            label: "KPI",
+            value: (row: PerformanceTableRow) => (row.kpi_excluded ? "Excluded" : "Counted"),
+            groupable: true,
+          }]
+        : []),
+    ],
+    { initialSort: { column: "clicks", direction: "desc" } },
+  );
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -86,8 +117,10 @@ export function PerformanceTable({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[1240px] text-sm">
+    <div>
+      <TableViewControls view={view} noun="URLs" />
+      <TableViewport view={view}>
+        <table className="w-full min-w-[1240px] text-sm">
         <thead>
           <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
             <th className="px-4 py-2.5">URL</th>
@@ -106,8 +139,10 @@ export function PerformanceTable({
             {onToggleKpiExclusion && <th className="px-4 py-2.5">KPI</th>}
           </tr>
         </thead>
-        <tbody>
-          {rows.map((row) => (
+        <TableViewBody
+          view={view}
+          colSpan={13 + (showMember ? 1 : 0) + (onToggleKpiExclusion ? 1 : 0)}
+          renderRow={(row) => (
             <tr key={row.content_url_id} className="border-b border-line last:border-0 hover:bg-neutral-soft/50">
               <td className="max-w-[260px] px-4 py-2.5">
                 <Link
@@ -207,9 +242,10 @@ export function PerformanceTable({
                 </td>
               )}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          )}
+        />
+        </table>
+      </TableViewport>
     </div>
   );
 }

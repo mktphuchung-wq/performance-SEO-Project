@@ -69,3 +69,17 @@ body {
 .numeric {
   font-variant-numeric: tabular-nums;
 }
+
+/* Opt-in table wrapping keeps dense tables compact by default while making
+ * long URLs, task names and notes readable when a user needs the full value. */
+.table-wrap-enabled th,
+.table-wrap-enabled td {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+
+.table-wrap-enabled .truncate {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}

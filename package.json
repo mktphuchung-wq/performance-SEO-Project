@@ -17,6 +17,7 @@
     "verify:warning-audit": "node scripts/verify-warning-audit.mjs",
     "verify:warning-audit-db": "node scripts/verify-warning-audit-db.mjs",
     "verify:warning-evaluation": "node --import ./scripts/alias-loader.mjs scripts/verify-warning-evaluation.mjs",
+    "verify:table-view": "node --no-warnings --experimental-strip-types scripts/verify-table-view.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

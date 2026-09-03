@@ -4,6 +4,7 @@ import { Card, CardHeader, EmptyState } from "@/components/ui";
 import { formatMonthLabel } from "@/lib/content-review/month";
 import { formatContentScore, formatPercent } from "@/lib/format";
 import type { ContentReviewBatch } from "@/lib/repositories/content-review";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 /**
  * A member reading their own Content KPI, month by month.
@@ -22,6 +23,19 @@ import type { ContentReviewBatch } from "@/lib/repositories/content-review";
  * them would hide both.
  */
 export function ContentReviewSummary({ history, loading }: { history: ContentReviewBatch[]; loading: boolean }) {
+  const view = useTableView(
+    history,
+    [
+      { id: "month", label: "Month", value: (row) => row.month, type: "date", groupable: true, groupLabel: (value) => formatMonthLabel(String(value)) },
+      { id: "score", label: "Content KPI", value: (row) => row.content_score, type: "number" },
+      { id: "quality", label: "Quality", value: (row) => row.avg_quality_pct, type: "number" },
+      { id: "tasks", label: "Tasks", value: (row) => row.task_count, type: "number" },
+      { id: "completion", label: "Completion", value: (row) => row.completion_pct, type: "number" },
+      { id: "status", label: "Status", value: (row) => row.status, groupable: true },
+    ],
+    { initialSort: { column: "month", direction: "desc" } },
+  );
+
   return (
     <Card>
       <CardHeader
@@ -39,7 +53,9 @@ export function ContentReviewSummary({ history, loading }: { history: ContentRev
       )}
 
       {!loading && history.length > 0 && (
-        <div className="overflow-x-auto">
+        <div>
+          <TableViewControls view={view} noun="months" />
+          <TableViewport view={view}>
           <table className="w-full text-left text-sm">
             <thead className="border-b border-line text-xs uppercase tracking-wide text-ink-subtle">
               <tr>
@@ -50,8 +66,11 @@ export function ContentReviewSummary({ history, loading }: { history: ContentRev
                 <th className="px-4 py-2.5 text-right font-medium">Completion</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-line">
-              {history.map((batch) => (
+            <TableViewBody
+              view={view}
+              colSpan={5}
+              className="divide-y divide-line"
+              renderRow={(batch) => (
                 <tr key={batch.id}>
                   <td className="px-5 py-2.5 text-ink">
                     {formatMonthLabel(batch.month)}
@@ -68,9 +87,10 @@ export function ContentReviewSummary({ history, loading }: { history: ContentRev
                     {formatPercent(batch.completion_pct)}
                   </td>
                 </tr>
-              ))}
-            </tbody>
+              )}
+            />
           </table>
+          </TableViewport>
         </div>
       )}
     </Card>

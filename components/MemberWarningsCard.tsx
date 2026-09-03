@@ -11,6 +11,7 @@ import {
   formatPercent,
   formatScore,
 } from "@/lib/format";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 export interface MemberWarningRow {
   id: string;
@@ -45,6 +46,21 @@ export function MemberWarningsCard({
   error: string | null;
 }) {
   const open = rows.filter((row) => row.resolved_at === null);
+  const view = useTableView(
+    open,
+    [
+      { id: "url", label: "URL", value: (row) => row.url },
+      { id: "project", label: "Project", value: (row) => row.project, groupable: true },
+      { id: "range", label: "Range", value: (row) => RANGE_SHORT_LABELS[row.range_key] ?? row.range_key, groupable: true },
+      { id: "month", label: "Month", value: (row) => row.evaluation_month, type: "date", groupable: true, groupLabel: (value) => formatMonth(String(value)) },
+      { id: "level", label: "Level", value: (row) => WARNING_LEVEL_LABELS[row.level] ?? row.level, groupable: true },
+      { id: "score", label: "Score", value: (row) => row.raw_score_snapshot, type: "number" },
+      { id: "drop", label: "Click drop", value: (row) => row.metric_snapshot?.click_drop_pct, type: "number" },
+      { id: "cost", label: "KPI cost", value: (row) => row.kpi_drag_points, type: "number" },
+      { id: "audit", label: "Audit", value: (row) => row.audit_status ? (AUDIT_STATUS_LABELS[row.audit_status] ?? row.audit_status) : "Monitoring", groupable: true },
+    ],
+    { initialSort: { column: "cost", direction: "desc" } },
+  );
 
   // Nothing to say when there is nothing flagged — an empty card would only add
   // a permanent reminder that warnings exist.
@@ -61,7 +77,9 @@ export function MemberWarningsCard({
       ) : error ? (
         <p className="px-5 py-4 text-[13px] text-negative">{error}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div>
+          <TableViewControls view={view} noun="warnings" />
+          <TableViewport view={view}>
           <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="border-b border-line bg-neutral-soft/60 text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -75,8 +93,10 @@ export function MemberWarningsCard({
                 <th className="px-5 py-2.5 text-left">Audit</th>
               </tr>
             </thead>
-            <tbody>
-              {open.map((row) => (
+            <TableViewBody
+              view={view}
+              colSpan={8}
+              renderRow={(row) => (
                 <tr key={row.id} className="border-b border-line last:border-0 hover:bg-neutral-soft/50">
                   <td className="max-w-[280px] px-5 py-2.5">
                     <Link
@@ -105,9 +125,10 @@ export function MemberWarningsCard({
                     {row.audit_status ? (AUDIT_STATUS_LABELS[row.audit_status] ?? row.audit_status) : "Monitoring"}
                   </td>
                 </tr>
-              ))}
-            </tbody>
+              )}
+            />
           </table>
+          </TableViewport>
         </div>
       )}
     </Card>

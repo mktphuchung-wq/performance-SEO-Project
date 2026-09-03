@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, CardHeader, EmptyState, Field, PageHeader, inputClass } from "@/components/ui";
 import { StatCard } from "@/components/StatCard";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 import { currentMonthInputValue, formatMonthLabel, normalizeMonth } from "@/lib/content-review/month";
 import { taskQualityPct } from "@/lib/content-review/quality";
 import { formatContentScore, formatPercent } from "@/lib/format";
@@ -199,6 +200,33 @@ export default function AdminContentReviewPage() {
     }
     return taskQualityPct(scores, criteriaById);
   }
+
+  const taskView = useTableView(
+    data?.tasks ?? [],
+    [
+      { id: "date", label: "Date", value: (task) => task.worked_at, type: "date", groupable: true },
+      { id: "task", label: "Task", value: (task) => task.task_title },
+      { id: "project", label: "Project", value: (task) => task.project, groupable: true },
+      { id: "type", label: "Type", value: (task) => task.work_type, groupable: true },
+      { id: "url", label: "URL", value: (task) => task.urls },
+      { id: "source", label: "Source", value: (task) => task.source === "manual" ? "Added by hand" : "Synced", groupable: true },
+      { id: "quality", label: "Quality", value: (task) => rowQuality(task.id), type: "number" },
+      { id: "note", label: "Note", value: (task) => notes[task.id] ?? task.note },
+    ],
+    { initialSort: { column: "date", direction: "desc" } },
+  );
+  const historyView = useTableView(
+    data?.history ?? [],
+    [
+      { id: "month", label: "Month", value: (row) => row.month, type: "date", groupable: true, groupLabel: (value) => formatMonthLabel(String(value)) },
+      { id: "score", label: "Content KPI", value: (row) => row.content_score, type: "number" },
+      { id: "quality", label: "Quality", value: (row) => row.avg_quality_pct, type: "number" },
+      { id: "tasks", label: "Tasks", value: (row) => row.task_count, type: "number" },
+      { id: "completion", label: "Completion", value: (row) => row.completion_pct, type: "number" },
+      { id: "status", label: "Status", value: (row) => row.status === "final" ? "Final" : "Draft", groupable: true },
+    ],
+    { initialSort: { column: "month", direction: "desc" } },
+  );
 
   async function patchBatch(body: Record<string, unknown>) {
     if (!batch) return;
@@ -569,7 +597,9 @@ export default function AdminContentReviewPage() {
         )}
 
         {!loading && batch && columns.length > 0 && data && data.tasks.length > 0 && (
-          <div className="overflow-x-auto">
+          <div>
+            <TableViewControls view={taskView} noun="tasks" />
+            <TableViewport view={taskView}>
             <table className="w-full text-left text-sm">
               <thead className="border-b border-line text-xs uppercase tracking-wide text-ink-subtle">
                 <tr>
@@ -588,8 +618,11 @@ export default function AdminContentReviewPage() {
                   <th className="px-4 py-2.5" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-line">
-                {data.tasks.map((task) => (
+              <TableViewBody
+                view={taskView}
+                colSpan={columns.length + 5}
+                className="divide-y divide-line"
+                renderRow={(task) => (
                   <tr key={task.id} className="align-top">
                     <td className="whitespace-nowrap px-4 py-2 numeric text-ink-muted">{task.worked_at ?? "—"}</td>
                     <td className="min-w-[220px] max-w-[320px] px-4 py-2">
@@ -660,9 +693,10 @@ export default function AdminContentReviewPage() {
                       </Button>
                     </td>
                   </tr>
-                ))}
-              </tbody>
+                )}
+              />
             </table>
+            </TableViewport>
           </div>
         )}
       </Card>
@@ -670,7 +704,9 @@ export default function AdminContentReviewPage() {
       {!loading && data && data.history.length > 0 && (
         <Card>
           <CardHeader title={`${member} — every reviewed month`} description="What the member sees on their own dashboard." />
-          <div className="overflow-x-auto">
+          <div>
+            <TableViewControls view={historyView} noun="months" />
+            <TableViewport view={historyView}>
             <table className="w-full text-left text-sm">
               <thead className="border-b border-line text-xs uppercase tracking-wide text-ink-subtle">
                 <tr>
@@ -682,8 +718,11 @@ export default function AdminContentReviewPage() {
                   <th className="px-4 py-2.5 font-medium">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-line">
-                {data.history.map((row) => (
+              <TableViewBody
+                view={historyView}
+                colSpan={6}
+                className="divide-y divide-line"
+                renderRow={(row) => (
                   <tr key={row.id} className={row.id === batch?.id ? "bg-accent-soft/40" : ""}>
                     <td className="px-4 py-2">{formatMonthLabel(row.month)}</td>
                     <td className="px-4 py-2 text-right numeric">{formatContentScore(row.content_score)}</td>
@@ -698,9 +737,10 @@ export default function AdminContentReviewPage() {
                       </Badge>
                     </td>
                   </tr>
-                ))}
-              </tbody>
+                )}
+              />
             </table>
+            </TableViewport>
           </div>
         </Card>
       )}

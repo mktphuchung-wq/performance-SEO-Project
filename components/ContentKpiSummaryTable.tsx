@@ -5,6 +5,7 @@ import { Card, CardHeader, EmptyState } from "@/components/ui";
 import { formatMonthLabel } from "@/lib/content-review/month";
 import { formatContentScore, formatPercent } from "@/lib/format";
 import type { ContentKpiSummaryRow } from "@/lib/repositories/content-review";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 interface SummaryResponse {
   rows: ContentKpiSummaryRow[];
@@ -59,6 +60,17 @@ export function ContentKpiSummaryTable({ title = "Content KPI" }: { title?: stri
 
   const loading = data === null && error === null;
   const rows = data?.rows ?? [];
+  const view = useTableView(
+    rows,
+    [
+      { id: "member", label: "Member", value: (row) => row.memberName, groupable: true },
+      { id: "this_month", label: "This month", value: (row) => row.thisMonth?.content_score, type: "number" },
+      { id: "previous_month", label: "Previous month", value: (row) => row.previousMonth?.content_score, type: "number" },
+      { id: "three_month", label: "3-month average", value: (row) => row.threeMonthAvg, type: "number" },
+      { id: "scored_months", label: "Scored months", value: (row) => row.scoredMonthCount, type: "number" },
+    ],
+    { initialSort: { column: "three_month", direction: "desc" } },
+  );
 
   const window =
     data?.thisMonth && data?.previousMonth
@@ -80,7 +92,9 @@ export function ContentKpiSummaryTable({ title = "Content KPI" }: { title?: stri
       )}
 
       {!loading && !error && rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <div>
+          <TableViewControls view={view} noun="members" />
+          <TableViewport view={view}>
           <table className="w-full text-left text-sm">
             <thead className="border-b border-line text-xs uppercase tracking-wide text-ink-subtle">
               <tr>
@@ -94,8 +108,11 @@ export function ContentKpiSummaryTable({ title = "Content KPI" }: { title?: stri
                 <th className="px-4 py-2.5 text-right font-medium">3-month avg</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-line">
-              {rows.map((row) => {
+            <TableViewBody
+              view={view}
+              colSpan={4}
+              className="divide-y divide-line"
+              renderRow={(row) => {
                 const missing = ROLLING_MONTHS - row.scoredMonthCount;
                 return (
                   <tr key={row.memberName}>
@@ -138,9 +155,10 @@ export function ContentKpiSummaryTable({ title = "Content KPI" }: { title?: stri
                     </td>
                   </tr>
                 );
-              })}
-            </tbody>
+              }}
+            />
           </table>
+          </TableViewport>
         </div>
       )}
     </Card>

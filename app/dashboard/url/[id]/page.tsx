@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { MetricDelta } from "@/components/MetricDelta";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 import { Badge, Card, CardHeader, type BadgeTone } from "@/components/ui";
 import {
   DATA_STATUS_LABELS,
@@ -40,6 +41,32 @@ export default function UrlDetailPage() {
   const [works, setWorks] = useState<ContentUrlWork[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const workView = useTableView(
+    works,
+    [
+      { id: "date", label: "Date", value: (row) => row.worked_at, type: "date", groupable: true },
+      { id: "type", label: "Type", value: (row) => row.work_type, groupable: true },
+      { id: "member", label: "Member", value: (row) => row.member_name, groupable: true },
+      { id: "kind", label: "Counts as", value: (row) => row.work_kind === "new" ? "New URL" : "Work on existing URL", groupable: true },
+    ],
+    { initialSort: { column: "date", direction: "desc" } },
+  );
+  const rangeView = useTableView(
+    rows,
+    [
+      { id: "range", label: "Range", value: (row) => RANGE_LABELS[row.range_key] ?? row.range_key, groupable: true },
+      { id: "start", label: "Window start", value: (row) => row.start_date, type: "date" },
+      { id: "clicks", label: "Clicks", value: (row) => row.clicks, type: "number" },
+      { id: "click_delta", label: "Δ Clicks", value: (row) => row.click_delta, type: "number" },
+      { id: "impressions", label: "Impressions", value: (row) => row.impressions, type: "number" },
+      { id: "impression_delta", label: "Δ Impressions", value: (row) => row.impression_delta, type: "number" },
+      { id: "ctr", label: "CTR", value: (row) => row.ctr, type: "number" },
+      { id: "position", label: "Avg position", value: (row) => row.position, type: "number" },
+      { id: "growth", label: "Growth", value: (row) => GROWTH_STATUS_LABELS[row.growth_status] ?? row.growth_status, groupable: true },
+      { id: "status", label: "Status", value: (row) => DATA_STATUS_LABELS[row.data_status] ?? row.data_status, groupable: true },
+    ],
+    { initialSort: { column: "start", direction: "desc" } },
+  );
 
   useEffect(() => {
     fetch(`/api/performance/url?id=${params.id}`)
@@ -112,7 +139,9 @@ export default function UrlDetailPage() {
             title="Work history"
             description="Every row the Sheet holds for this URL. Only a row that created the URL sets its published date; audits and updates never withhold Search Console data."
           />
-          <div className="overflow-x-auto">
+          <div>
+            <TableViewControls view={workView} noun="work events" />
+            <TableViewport view={workView}>
             <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -122,8 +151,10 @@ export default function UrlDetailPage() {
                   <th className="px-4 py-2.5">Counts as</th>
                 </tr>
               </thead>
-              <tbody>
-                {works.map((work) => (
+              <TableViewBody
+                view={workView}
+                colSpan={4}
+                renderRow={(work) => (
                   <tr key={work.id} className="border-b border-line last:border-0">
                     <td className="whitespace-nowrap px-4 py-2.5 numeric text-ink">{work.worked_at ?? "—"}</td>
                     <td className="px-4 py-2.5 text-ink-muted">{work.work_type || "—"}</td>
@@ -134,9 +165,10 @@ export default function UrlDetailPage() {
                       </Badge>
                     </td>
                   </tr>
-                ))}
-              </tbody>
+                )}
+              />
             </table>
+            </TableViewport>
           </div>
         </Card>
       )}
@@ -163,7 +195,9 @@ export default function UrlDetailPage() {
 
       <Card>
         <CardHeader title="All ranges" />
-        <div className="overflow-x-auto">
+        <div>
+          <TableViewControls view={rangeView} noun="ranges" />
+          <TableViewport view={rangeView}>
           <table className="w-full min-w-[920px] text-sm">
             <thead>
               <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -179,8 +213,10 @@ export default function UrlDetailPage() {
                 <th className="px-4 py-2.5">Status</th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((row) => (
+            <TableViewBody
+              view={rangeView}
+              colSpan={10}
+              renderRow={(row) => (
                 <tr key={row.range_key} className="border-b border-line last:border-0">
                   <td className="px-4 py-2.5 font-medium text-ink">{RANGE_LABELS[row.range_key] ?? row.range_key}</td>
                   <td className="whitespace-nowrap px-4 py-2.5 text-[13px] text-ink-muted">
@@ -222,9 +258,10 @@ export default function UrlDetailPage() {
                     )}
                   </td>
                 </tr>
-              ))}
-            </tbody>
+              )}
+            />
           </table>
+          </TableViewport>
         </div>
       </Card>
     </div>

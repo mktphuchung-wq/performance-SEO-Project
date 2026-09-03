@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, CardHeader, EmptyState, Field, inputClass } from "@/components/ui";
 import { AUDIT_ROLE_LABELS, formatDate } from "@/lib/format";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 interface AuditRoleRow {
   email: string;
@@ -35,6 +36,17 @@ export function AuditRolesPanel() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("approver");
   const [note, setNote] = useState("");
+  const view = useTableView(
+    rows,
+    [
+      { id: "email", label: "Email", value: (row) => row.email },
+      { id: "role", label: "Role", value: (row) => AUDIT_ROLE_LABELS[row.role] ?? row.role, groupable: true },
+      { id: "note", label: "Note", value: (row) => row.note },
+      { id: "granted_by", label: "Granted by", value: (row) => row.granted_by, groupable: true },
+      { id: "updated", label: "Granted", value: (row) => row.updated_at, type: "date" },
+    ],
+    { initialSort: { column: "email", direction: "asc" } },
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,7 +147,10 @@ export function AuditRolesPanel() {
           hint="Grant the approver role to at least two people, or every proposed conclusion will sit unapproved."
         />
       ) : (
-        <table className="w-full text-sm">
+        <div>
+          <TableViewControls view={view} noun="roles" />
+          <TableViewport view={view}>
+          <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-line bg-neutral-soft/60 text-xs font-medium uppercase tracking-wide text-ink-subtle">
               <th className="px-5 py-2.5 text-left">Email</th>
@@ -145,8 +160,10 @@ export function AuditRolesPanel() {
               <th className="px-5 py-2.5" />
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row) => (
+          <TableViewBody
+            view={view}
+            colSpan={5}
+            renderRow={(row) => (
               <tr key={row.email} className="border-b border-line last:border-0">
                 <td className="px-5 py-2.5 text-ink">{row.email}</td>
                 <td className="px-5 py-2.5">
@@ -164,9 +181,11 @@ export function AuditRolesPanel() {
                   </Button>
                 </td>
               </tr>
-            ))}
-          </tbody>
+            )}
+          />
         </table>
+          </TableViewport>
+        </div>
       )}
       {message && (
         <p className={`border-t border-line px-5 py-3 text-[13px] ${message.failed ? "text-negative" : "text-ink-muted"}`}>

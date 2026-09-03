@@ -2,6 +2,7 @@
 
 import { formatNumber, formatScore } from "@/lib/format";
 import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 export interface KpiScoreTableRow {
   key: string;
@@ -27,6 +28,19 @@ function scoreTone(value: number | null): BadgeTone {
  * RollupTable already has two callers that should not shift underneath them.
  */
 export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[]; entityLabel: string }) {
+  const view = useTableView(
+    rows,
+    [
+      { id: "label", label: entityLabel, value: (row) => row.label, groupable: true },
+      { id: "score", label: "KPI score", value: (row) => row.kpi_score, type: "number" },
+      { id: "scored", label: "Scored", value: (row) => row.eligible_url_count, type: "number" },
+      { id: "excluded", label: "Excluded", value: (row) => row.excluded_url_count, type: "number" },
+      { id: "no_data", label: "No data", value: (row) => row.no_data_url_count, type: "number" },
+      { id: "capped", label: "Capped", value: (row) => row.capped_url_count, type: "number" },
+    ],
+    { initialSort: { column: "score", direction: "desc" } },
+  );
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -37,8 +51,10 @@ export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[];
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[900px] text-sm">
+    <div>
+      <TableViewControls view={view} noun={entityLabel.toLowerCase()} />
+      <TableViewport view={view}>
+        <table className="w-full min-w-[900px] text-sm">
         <thead>
           <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
             <th className="px-4 py-2.5">#</th>
@@ -50,8 +66,10 @@ export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[];
             <th className="px-4 py-2.5 text-right">Capped</th>
           </tr>
         </thead>
-        <tbody>
-          {rows.map((row, index) => (
+        <TableViewBody
+          view={view}
+          colSpan={7}
+          renderRow={(row, index) => (
             <tr key={row.key} className="border-b border-line last:border-0 hover:bg-neutral-soft/50">
               <td className="numeric px-4 py-2.5 text-ink-subtle">{index + 1}</td>
               <td className="px-4 py-2.5 font-medium text-ink">{row.label}</td>
@@ -75,9 +93,10 @@ export function KpiScoreTable({ rows, entityLabel }: { rows: KpiScoreTableRow[];
                 {row.capped_url_count}
               </td>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          )}
+        />
+        </table>
+      </TableViewport>
     </div>
   );
 }

@@ -1,15 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { MetricDelta } from "@/components/MetricDelta";
-import { Badge, EmptyState, inputClass, type BadgeTone } from "@/components/ui";
+import { Badge, EmptyState, type BadgeTone } from "@/components/ui";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 import { formatNumber, formatScore } from "@/lib/format";
 import {
-  filterSummaryRows,
   joinSummaryRows,
-  sortSummaryRows,
   volumeLabel,
-  type SortKey,
   type SummaryRollupRow,
   type SummaryScoreRow,
 } from "@/lib/performance/kpi-summary";
@@ -20,45 +18,6 @@ function scoreTone(value: number | null | undefined): BadgeTone {
   if (value >= 80) return "positive";
   if (value >= 50) return "accent";
   return "negative";
-}
-
-function SortHeader({
-  label,
-  sortKey,
-  active,
-  direction,
-  onSort,
-  align = "left",
-  title,
-}: {
-  label: string;
-  sortKey: SortKey;
-  active: boolean;
-  direction: "asc" | "desc";
-  onSort: (key: SortKey) => void;
-  align?: "left" | "right";
-  title?: string;
-}) {
-  return (
-    <th
-      aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
-      className={`px-4 py-2.5 ${align === "right" ? "text-right" : "text-left"}`}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        title={title}
-        className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-ink ${
-          active ? "text-ink" : ""
-        }`}
-      >
-        {label}
-        <span aria-hidden="true" className={active ? "" : "opacity-0"}>
-          {direction === "asc" ? "▲" : "▼"}
-        </span>
-      </button>
-    </th>
-  );
 }
 
 /**
@@ -81,22 +40,36 @@ export function KpiSummaryTable({
   volume: ContentVolumeRow[];
   entityLabel: string;
 }) {
-  const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("score");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-
   const rows = useMemo(() => joinSummaryRows(scores, rollups, volume), [scores, rollups, volume]);
-  const filtered = useMemo(() => filterSummaryRows(rows, search), [rows, search]);
-  const sorted = useMemo(() => sortSummaryRows(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
-
-  function toggleSort(key: SortKey) {
-    if (key === sortKey) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir(key === "name" ? "asc" : "desc");
-    }
-  }
+  const view = useTableView(
+    rows,
+    [
+      { id: "name", label: entityLabel, value: (row) => row.name },
+      { id: "volume", label: "Số lượng", value: (row) => row.volumeTotal, type: "number" },
+      { id: "score", label: "Range score", value: (row) => row.score?.kpi_score, type: "number" },
+      { id: "clicks", label: "Clicks", value: (row) => row.rollup?.clicks, type: "number" },
+      { id: "click_delta", label: "Δ Clicks", value: (row) => row.rollup?.click_delta, type: "number" },
+      { id: "impressions", label: "Impressions", value: (row) => row.rollup?.impressions, type: "number" },
+      { id: "impression_delta", label: "Δ Impressions", value: (row) => row.rollup?.impression_delta, type: "number" },
+      { id: "eligible", label: "Eligible", value: (row) => row.score?.eligible_url_count, type: "number" },
+      { id: "excluded", label: "Excluded", value: (row) => row.score?.excluded_url_count, type: "number" },
+      { id: "no_data", label: "No data", value: (row) => row.score?.no_data_url_count, type: "number" },
+      {
+        id: "score_band",
+        label: "Score band",
+        value: (row) => {
+          const score = row.score?.kpi_score;
+          if (score === null || score === undefined) return "No score";
+          if (score >= 80) return "80–100";
+          if (score >= 50) return "50–79";
+          return "Below 50";
+        },
+        groupable: true,
+        sortable: false,
+      },
+    ],
+    { initialSort: { column: "score", direction: "desc" } },
+  );
 
   if (rows.length === 0) {
     return (
@@ -107,61 +80,29 @@ export function KpiSummaryTable({
     );
   }
 
-  const headerProps = { active: false, direction: sortDir, onSort: toggleSort };
-
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={`Filter by ${entityLabel.toLowerCase()}…`}
-          aria-label={`Filter by ${entityLabel.toLowerCase()}`}
-          className={`${inputClass} max-w-xs`}
-        />
-        <span className="text-[13px] text-ink-subtle">
-          {sorted.length} of {rows.length} {entityLabel.toLowerCase()}
-          {rows.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      <div className="overflow-x-auto">
+      <TableViewControls view={view} noun={entityLabel.toLowerCase()} />
+      <TableViewport view={view}>
         <table className="w-full min-w-[1080px] text-sm">
           <thead>
-            <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium text-ink-subtle">
-              <SortHeader {...headerProps} label={entityLabel} sortKey="name" active={sortKey === "name"} />
-              <SortHeader
-                {...headerProps}
-                label="Số lượng"
-                sortKey="volume"
-                active={sortKey === "volume"}
-                align="right"
-                title="URLs worked on inside this window, by the Sheet's type column"
-              />
-              <SortHeader
-                {...headerProps}
-                label="Range score"
-                sortKey="score"
-                active={sortKey === "score"}
-                title="Score for the selected range only — the Official KPI is the 1M/3M/6M blend above"
-              />
-              <SortHeader {...headerProps} label="Clicks" sortKey="clicks" active={sortKey === "clicks"} align="right" />
+            <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
+              <th className="px-4 py-2.5">{entityLabel}</th>
+              <th className="px-4 py-2.5 text-right" title="URLs worked on inside this window, by the Sheet's type column">Số lượng</th>
+              <th className="px-4 py-2.5" title="Score for the selected range only — the Official KPI is the 1M/3M/6M blend above">Range score</th>
+              <th className="px-4 py-2.5 text-right">Clicks</th>
               <th className="px-4 py-2.5 text-right uppercase tracking-wide">Δ Clicks</th>
-              <SortHeader
-                {...headerProps}
-                label="Impressions"
-                sortKey="impressions"
-                active={sortKey === "impressions"}
-                align="right"
-              />
+              <th className="px-4 py-2.5 text-right">Impressions</th>
               <th className="px-4 py-2.5 text-right uppercase tracking-wide">Δ Impressions</th>
               <th className="px-4 py-2.5 text-right uppercase tracking-wide">Eligible</th>
               <th className="px-4 py-2.5 text-right uppercase tracking-wide">Excluded</th>
               <th className="px-4 py-2.5 text-right uppercase tracking-wide">No data</th>
             </tr>
           </thead>
-          <tbody>
-            {sorted.map((row) => (
+          <TableViewBody
+            view={view}
+            colSpan={10}
+            renderRow={(row) => (
               <tr key={row.name} className="border-b border-line last:border-0 hover:bg-neutral-soft/50">
                 <td className="px-4 py-2.5 font-medium text-ink">{row.name}</td>
                 <td className="numeric px-4 py-2.5 text-right text-ink" title={volumeLabel(row)}>
@@ -205,10 +146,10 @@ export function KpiSummaryTable({
                   {row.score ? row.score.no_data_url_count : "—"}
                 </td>
               </tr>
-            ))}
-          </tbody>
+            )}
+          />
         </table>
-      </div>
+      </TableViewport>
     </div>
   );
 }

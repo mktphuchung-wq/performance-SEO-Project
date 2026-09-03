@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, CardHeader, EmptyState, type BadgeTone } from "@/components/ui";
 import { formatNumber } from "@/lib/format";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 
 export interface MonthlyMetricRow {
   period_start: string;
@@ -54,6 +55,18 @@ export function BaselineHistoryPanel({
   const [rows, setRows] = useState<MonthlyMetricRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const view = useTableView(
+    rows,
+    [
+      { id: "month", label: "Month", value: (row) => row.period_start, type: "date", groupable: true, groupLabel: (value) => String(value).slice(0, 7) },
+      { id: "clicks", label: "Clicks", value: (row) => row.clicks, type: "number" },
+      { id: "impressions", label: "Impressions", value: (row) => row.impressions, type: "number" },
+      { id: "detected", label: "Detected", value: (row) => ANOMALY_LABELS[row.anomaly_status] ?? row.anomaly_status, groupable: true },
+      { id: "baseline", label: "In baseline", value: (row) => isExcluded(row) ? "Left out" : "Counted", groupable: true },
+      { id: "override", label: "Override", value: (row) => row.manual_override ?? "None", groupable: true },
+    ],
+    { initialSort: { column: "month", direction: "desc" } },
+  );
 
   const load = useCallback(() => {
     setLoading(true);
@@ -111,7 +124,9 @@ export function BaselineHistoryPanel({
         />
       )}
       {!loading && rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <div>
+          <TableViewControls view={view} noun="months" />
+          <TableViewport view={view}>
           <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b border-line bg-neutral-soft/60 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -123,8 +138,10 @@ export function BaselineHistoryPanel({
                 <th className="px-4 py-2.5">Override</th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((row) => (
+            <TableViewBody
+              view={view}
+              colSpan={6}
+              renderRow={(row) => (
                 <tr key={row.period_start} className="border-b border-line last:border-0">
                   <td className="numeric whitespace-nowrap px-4 py-2.5 text-ink">{row.period_start.slice(0, 7)}</td>
                   <td className="numeric px-4 py-2.5 text-right text-ink">{formatNumber(row.clicks)}</td>
@@ -169,9 +186,10 @@ export function BaselineHistoryPanel({
                     </div>
                   </td>
                 </tr>
-              ))}
-            </tbody>
+              )}
+            />
           </table>
+          </TableViewport>
         </div>
       )}
       <p className="border-t border-line px-5 py-3 text-[13px] text-ink-muted">

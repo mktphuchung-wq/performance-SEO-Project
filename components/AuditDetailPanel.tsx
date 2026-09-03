@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuditEvidenceForm } from "@/components/AuditEvidenceForm";
+import { TableViewBody, TableViewControls, TableViewport, useTableView } from "@/components/TableView";
 import { Badge, Button, Card, CardHeader, EmptyState } from "@/components/ui";
 import {
   AUDIT_CONCLUSION_LABELS,
@@ -84,6 +85,18 @@ export function AuditDetailPanel({ auditId, onChanged }: { auditId: string; onCh
   const [confidenceNote, setConfidenceNote] = useState("");
   const [causeStart, setCauseStart] = useState("");
   const [causeEnd, setCauseEnd] = useState("");
+  const warningView = useTableView(
+    warnings,
+    [
+      { id: "member", label: "Member", value: (row) => row.member_name, groupable: true },
+      { id: "range", label: "Range", value: (row) => RANGE_SHORT_LABELS[row.range_key] ?? row.range_key, groupable: true },
+      { id: "month", label: "Month", value: (row) => row.evaluation_month, type: "date", groupable: true, groupLabel: (value) => formatMonth(String(value)) },
+      { id: "level", label: "Level", value: (row) => WARNING_LEVEL_LABELS[row.level] ?? row.level, groupable: true },
+      { id: "score", label: "Score", value: (row) => row.raw_score_snapshot, type: "number" },
+      { id: "drag", label: "KPI drag", value: (row) => row.kpi_drag_points, type: "number" },
+    ],
+    { initialSort: { column: "drag", direction: "desc" } },
+  );
 
   const applyDetail = useCallback((body: DetailBody) => {
     setAudit(body.audit);
@@ -200,7 +213,9 @@ export function AuditDetailPanel({ auditId, onChanged }: { auditId: string; onCh
             Being past SLA measures how the queue is worked. It changes no score, and neither does resolving this case.
           </p>
           {warnings.length > 0 && (
-            <div className="overflow-x-auto">
+            <div className="-mx-5 border-y border-line">
+              <TableViewControls view={warningView} noun="warnings" />
+              <TableViewport view={warningView}>
               <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="border-b border-line bg-neutral-soft/60 text-xs font-medium uppercase tracking-wide text-ink-subtle">
@@ -212,8 +227,10 @@ export function AuditDetailPanel({ auditId, onChanged }: { auditId: string; onCh
                     <th className="px-3 py-2 text-right">KPI drag</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {warnings.map((warning) => (
+                <TableViewBody
+                  view={warningView}
+                  colSpan={6}
+                  renderRow={(warning) => (
                     <tr key={warning.id} className="border-b border-line last:border-0">
                       <td className="px-3 py-2">{warning.member_name}</td>
                       <td className="px-3 py-2">{RANGE_SHORT_LABELS[warning.range_key] ?? warning.range_key}</td>
@@ -226,9 +243,10 @@ export function AuditDetailPanel({ auditId, onChanged }: { auditId: string; onCh
                       <td className="numeric px-3 py-2 text-right">{formatScore(warning.raw_score_snapshot)}</td>
                       <td className="numeric px-3 py-2 text-right">{formatDragPoints(warning.kpi_drag_points)}</td>
                     </tr>
-                  ))}
-                </tbody>
+                  )}
+                />
               </table>
+              </TableViewport>
             </div>
           )}
         </div>
