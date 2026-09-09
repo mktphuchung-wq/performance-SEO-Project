@@ -1,10 +1,7 @@
-import { NextResponse } from "next/server";
 import { listMemberRollups } from "@/lib/repositories/rollups";
-import { DEFAULT_RANGE_KEY, type RangeKey } from "@/lib/ranges";
+import { runJson } from "@/lib/api/route-response";
+import { readSelectableRange } from "@/lib/api/ranges";
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const rangeKey = (searchParams.get("range") as RangeKey) || DEFAULT_RANGE_KEY;
-  const rows = await listMemberRollups(rangeKey);
-  return NextResponse.json({ rows });
+  return runJson("GET /api/admin/members", async () => ({ rows: await listMemberRollups(readSelectableRange(req)) }));
 }

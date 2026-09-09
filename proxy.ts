@@ -11,7 +11,16 @@ export default withAuth(
 
     if (requiresAdmin && !token?.isAdmin) {
       if (pathname.startsWith("/api/")) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        const status = token ? 403 : 401;
+        const requestId = crypto.randomUUID();
+        return NextResponse.json(
+          {
+            error: token ? "You do not have permission to access this resource." : "Please sign in to continue.",
+            code: token ? "FORBIDDEN" : "UNAUTHORIZED",
+            requestId,
+          },
+          { status, headers: { "x-request-id": requestId } },
+        );
       }
       return NextResponse.redirect(new URL("/dashboard", req.url));
     }
@@ -20,7 +29,7 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => Boolean(token),
+      authorized: ({ req, token }) => req.nextUrl.pathname.startsWith("/api/") || Boolean(token),
     },
   },
 );

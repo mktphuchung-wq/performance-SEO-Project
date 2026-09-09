@@ -30,9 +30,11 @@ const PERIODS: Array<{ key: KpiPeriodKey; label: string; field: "score1m" | "sco
 export function MemberKpiSummary({
   summary,
   loading = false,
+  error = null,
 }: {
   summary: MemberCompositeKpi | null;
   loading?: boolean;
+  error?: string | null;
 }) {
   const weights = summary?.weights;
   const coverage = summary?.availablePeriodCount ?? 0;
@@ -53,6 +55,8 @@ export function MemberKpiSummary({
           <div className="mt-2.5">
             {loading ? (
               <span className="text-[13px] text-ink-subtle">Loading…</span>
+            ) : error ? (
+              <span className="text-[13px] text-negative">{error}</span>
             ) : summary ? (
               <TrendBadge trend={summary.trend} />
             ) : (

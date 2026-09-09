@@ -1,18 +1,13 @@
-import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { getMemberRollupByEmail } from "@/lib/repositories/rollups";
-import { DEFAULT_RANGE_KEY, type RangeKey } from "@/lib/ranges";
+import { ApiRouteError, runJson } from "@/lib/api/route-response";
+import { readSelectableRange } from "@/lib/api/ranges";
 
 export async function GET(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.email) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { searchParams } = new URL(req.url);
-  const rangeKey = (searchParams.get("range") as RangeKey) || DEFAULT_RANGE_KEY;
-
-  const rollup = await getMemberRollupByEmail(session.user.email, rangeKey);
-  return NextResponse.json({ rollup });
+  return runJson("GET /api/me/performance", async () => {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) throw new ApiRouteError(401, "UNAUTHORIZED", "Please sign in to continue.");
+    return { rollup: await getMemberRollupByEmail(session.user.email, readSelectableRange(req)) };
+  });
 }
