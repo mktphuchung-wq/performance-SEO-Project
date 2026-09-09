@@ -19,6 +19,8 @@ interface RefreshRunState {
   completed_items: number;
   retry_count: number;
   gsc_call_count: number;
+  published: boolean;
+  published_at?: string | null;
   heartbeat_at: string;
   error_message?: string | null;
 }
@@ -206,7 +208,7 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
     let currentRun: RefreshRunState = startData.run ?? {
       id: runId, status: "queued", phase: "planning", range_key: rangeKey,
       total_urls: 0, processed_urls: 0, urls_with_data: 0, no_data_urls: 0, failed_urls: 0,
-      total_items: 0, completed_items: 0, retry_count: 0, gsc_call_count: 0, heartbeat_at: new Date().toISOString(),
+      total_items: 0, completed_items: 0, retry_count: 0, gsc_call_count: 0, published: false, heartbeat_at: new Date().toISOString(),
     };
     setRun(currentRun);
     let statusFailures = 0;
@@ -276,8 +278,9 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
         setRangeIndex(index);
         try {
           const finalRun = await refreshRange(target);
-          completed += 1;
-          if (finalRun.status === "partial") {
+          if (finalRun.status === "success" && finalRun.published) {
+            completed += 1;
+          } else {
             failures.push(`${RANGE_LABELS[target] ?? target}: ${finalRun.error_message ?? `${finalRun.failed_urls} URL(s) failed`}`);
           }
         } catch (error) {
@@ -285,7 +288,9 @@ export function SyncRefreshPanel({ onDone }: { onDone?: () => void }) {
         }
       }
       if (failures.length > 0) {
-        const prefix = completed > 0 ? `${completed} of ${selectedRanges.length} ranges refreshed — ` : "";
+        const prefix = completed > 0
+          ? `${completed} of ${selectedRanges.length} ranges refreshed — `
+          : "No ranges were refreshed — ";
         setRefreshError(prefix + failures.join(" · "));
       }
       // Refetch whenever any range landed, otherwise the overview keeps showing

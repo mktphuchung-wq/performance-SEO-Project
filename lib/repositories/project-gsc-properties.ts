@@ -1,4 +1,5 @@
-import { query } from "@/lib/db";
+import { query, withTransaction } from "@/lib/db";
+import { gscPropertyCoversUrl } from "@/lib/gsc-property";
 import type { ProjectType } from "@/lib/performance/score";
 
 export interface ProjectGscProperty {
@@ -6,6 +7,16 @@ export interface ProjectGscProperty {
   gsc_property: string;
   notes: string | null;
   project_type: ProjectType;
+}
+
+export { gscPropertyCoversUrl };
+
+export async function listProjectUrls(project: string): Promise<string[]> {
+  const rows = await query<{ url: string }>(
+    "select url from public.content_urls where is_active = true and project = $1 order by url",
+    [project],
+  );
+  return rows.map((row) => row.url);
 }
 
 export async function listProjectGscProperties(): Promise<ProjectGscProperty[]> {
@@ -25,35 +36,39 @@ export async function upsertProjectGscProperty(
   notes?: string,
   projectType?: ProjectType,
 ): Promise<void> {
-  await query(
-    // project_type is coalesced on both sides: a new row falls back to the
-    // 'growth' default, and re-saving an existing mapping without naming a type
-    // keeps whatever it already had rather than silently resetting it.
-    `insert into public.project_gsc_properties (project, gsc_property, notes, project_type)
-     values ($1, $2, $3, coalesce($4, 'growth'))
-     on conflict (project) do update set
-       gsc_property = excluded.gsc_property,
-       notes = excluded.notes,
-       project_type = coalesce($4, public.project_gsc_properties.project_type),
-       updated_at = now()`,
-    [project, gscProperty, notes ?? null, projectType ?? null],
-  );
-  // Apply to URLs already synced, so admins don't have to re-sync the Sheet
-  // after fixing a mapping.
-  await query(
-    `update public.content_urls
-       set gsc_property = $2, updated_at = now()
-     where project = $1 and gsc_property is distinct from $2`,
-    [project, gscProperty],
-  );
+  await withTransaction(async (client) => {
+    await client.query(
+      // project_type is coalesced on both sides: a new row falls back to the
+      // 'growth' default, and re-saving an existing mapping without naming a type
+      // keeps whatever it already had rather than silently resetting it.
+      `insert into public.project_gsc_properties (project, gsc_property, notes, project_type)
+       values ($1, $2, $3, coalesce($4, 'growth'))
+       on conflict (project) do update set
+         gsc_property = excluded.gsc_property,
+         notes = excluded.notes,
+         project_type = coalesce($4, public.project_gsc_properties.project_type),
+         updated_at = now()`,
+      [project, gscProperty, notes ?? null, projectType ?? null],
+    );
+    // Apply to URLs already synced, so admins don't have to re-sync the Sheet
+    // after fixing a mapping.
+    await client.query(
+      `update public.content_urls
+         set gsc_property = $2, updated_at = now()
+       where project = $1 and gsc_property is distinct from $2`,
+      [project, gscProperty],
+    );
+  });
 }
 
 export async function deleteProjectGscProperty(project: string): Promise<void> {
-  await query("delete from public.project_gsc_properties where project = $1", [project]);
-  await query(
-    `update public.content_urls
-       set gsc_property = null, updated_at = now()
-     where project = $1 and gsc_property is not null`,
-    [project],
-  );
+  await withTransaction(async (client) => {
+    await client.query("delete from public.project_gsc_properties where project = $1", [project]);
+    await client.query(
+      `update public.content_urls
+         set gsc_property = null, updated_at = now()
+       where project = $1 and gsc_property is not null`,
+      [project],
+    );
+  });
 }

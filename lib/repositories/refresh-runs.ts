@@ -46,6 +46,8 @@ export interface RefreshRun {
   gsc_query_ms: number | null;
   db_write_ms: number | null;
   gsc_call_count: number;
+  published: boolean;
+  published_at: string | null;
   heartbeat_at: string;
   started_at: string;
   finished_at: string | null;
@@ -320,6 +322,15 @@ export async function finishRefreshRun(id: string, status: "success" | "partial"
      where id = $1 and status in ('queued', 'running')`;
   if (db) await db.query(sql, [id, status, errorMessage ?? null]);
   else await query(sql, [id, status, errorMessage ?? null]);
+}
+
+/** Records the moment the staged snapshot became the dashboard's canonical cache. */
+export async function markRefreshPublished(id: string, db: DbExecutor): Promise<void> {
+  await db.query(
+    `update public.refresh_runs set published = true, published_at = now(), updated_at = now()
+     where id = $1 and status = 'running'`,
+    [id],
+  );
 }
 
 export async function listRecentRefreshRuns(limit = 10): Promise<RefreshRun[]> {

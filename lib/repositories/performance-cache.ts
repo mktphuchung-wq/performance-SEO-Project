@@ -15,9 +15,9 @@ export interface UpsertPerformanceCacheInput {
   errorMessage?: string | null;
 }
 
-export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput): Promise<void> {
+export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput, db?: DbExecutor): Promise<void> {
   const g = input.growth;
-  await query(
+  const sql =
     `insert into public.seo_performance_cache
        (content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
         clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
@@ -45,7 +45,8 @@ export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput)
        data_status = excluded.data_status,
        error_message = excluded.error_message,
        refreshed_at = now(),
-       updated_at = now()`,
+       updated_at = now()`;
+  const params =
     [
       input.contentUrlId,
       input.rangeKey,
@@ -68,8 +69,9 @@ export async function upsertPerformanceCache(input: UpsertPerformanceCacheInput)
       g.growthStatus,
       g.dataStatus,
       input.errorMessage ?? null,
-    ],
-  );
+    ];
+  if (db) await db.query(sql, params);
+  else await query(sql, params);
 }
 
 export async function bulkUpsertPerformanceCache(inputs: UpsertPerformanceCacheInput[], db?: DbExecutor): Promise<void> {
@@ -203,11 +205,11 @@ export async function publishStagedPerformanceCache(refreshRunId: string, db: Db
        (content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
         clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
         click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
-        error_message, refreshed_at, updated_at)
+        error_message, published_refresh_run_id, refreshed_at, updated_at)
      select content_url_id, range_key, start_date, end_date, previous_start_date, previous_end_date,
             clicks, impressions, ctr, position, previous_clicks, previous_impressions, previous_ctr, previous_position,
             click_delta, click_growth_pct, impression_delta, impression_growth_pct, growth_status, data_status,
-            error_message, now(), now()
+            error_message, $2, now(), now()
      from public.seo_performance_cache_stage where refresh_run_id = $1
      on conflict (content_url_id, range_key) do update set
        start_date = excluded.start_date, end_date = excluded.end_date,
@@ -218,8 +220,9 @@ export async function publishStagedPerformanceCache(refreshRunId: string, db: Db
        click_delta = excluded.click_delta, click_growth_pct = excluded.click_growth_pct,
        impression_delta = excluded.impression_delta, impression_growth_pct = excluded.impression_growth_pct,
        growth_status = excluded.growth_status, data_status = excluded.data_status,
-       error_message = excluded.error_message, refreshed_at = now(), updated_at = now()`,
-    [refreshRunId],
+       error_message = excluded.error_message, published_refresh_run_id = excluded.published_refresh_run_id,
+       refreshed_at = now(), updated_at = now()`,
+    [refreshRunId, refreshRunId],
   );
 }
 

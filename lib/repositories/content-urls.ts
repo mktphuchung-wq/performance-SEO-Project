@@ -69,12 +69,12 @@ export async function bulkUpsertContentUrls(rows: BulkUpsertContentUrlInput[], d
        (url_hash, content_hash, project, url, member_name, member_email, work_type, gsc_property,
         worked_at, first_worked_at, published_at, source_row_number, is_active, last_seen_at, updated_at)
      select x.url_hash, x.content_hash, x.project, x.url, x.member_name, x.member_email, x.work_type,
-            x.gsc_property, x.worked_at, x.first_worked_at, x.published_at, x.source_row_number, true, now(), now()
+            mapping.gsc_property, x.worked_at, x.first_worked_at, x.published_at, x.source_row_number, true, now(), now()
      from jsonb_to_recordset($1::jsonb) as x(
        url_hash text, content_hash text, project text, url text, member_name text, member_email text,
        work_type text, gsc_property text, worked_at date, first_worked_at date, published_at date,
        source_row_number integer
-     )
+     ) left join public.project_gsc_properties mapping on mapping.project = x.project
      on conflict (url_hash) do update set
        content_hash = excluded.content_hash,
        project = excluded.project,

@@ -166,6 +166,9 @@ export default function AdminSettingsPage() {
   const [propProject, setPropProject] = useState("");
   const [propGscProperty, setPropGscProperty] = useState("");
   const [propProjectType, setPropProjectType] = useState("growth");
+  const [propertyMessage, setPropertyMessage] = useState<string | null>(null);
+  const [propertyFailed, setPropertyFailed] = useState(false);
+  const [propertySaving, setPropertySaving] = useState(false);
 
   const [kpiSettings, setKpiSettings] = useState<KpiSettingsRow | null>(null);
   const [kpiDraft, setKpiDraft] = useState<Record<string, string>>({});
@@ -264,19 +267,32 @@ export default function AdminSettingsPage() {
 
   async function saveProperty() {
     if (!propProject || !propGscProperty) return;
-    await fetch("/api/admin/project-gsc-properties", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        project: propProject,
-        gscProperty: propGscProperty,
-        projectType: propProjectType,
-      }),
-    });
-    setPropProject("");
-    setPropGscProperty("");
-    setPropProjectType("growth");
-    loadProperties();
+    setPropertySaving(true);
+    setPropertyFailed(false);
+    setPropertyMessage(null);
+    try {
+      const response = await fetch("/api/admin/project-gsc-properties", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          project: propProject,
+          gscProperty: propGscProperty,
+          projectType: propProjectType,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not save Search Console mapping");
+      setPropProject("");
+      setPropGscProperty("");
+      setPropProjectType("growth");
+      setPropertyMessage("Search Console mapping saved.");
+      loadProperties();
+    } catch (error) {
+      setPropertyFailed(true);
+      setPropertyMessage((error as Error).message);
+    } finally {
+      setPropertySaving(false);
+    }
   }
 
   async function saveKpiSettings() {
@@ -394,10 +410,14 @@ export default function AdminSettingsPage() {
                 <option value="stable">Stable</option>
               </select>
             </Field>
-            <Button onClick={saveProperty} disabled={!propProject || !propGscProperty}>
-              Save mapping
+            <Button onClick={saveProperty} disabled={!propProject || !propGscProperty || propertySaving}>
+              {propertySaving ? "Saving..." : "Save mapping"}
             </Button>
           </div>
+
+          {propertyMessage && (
+            <p className={`text-[13px] ${propertyFailed ? "text-negative" : "text-ink-muted"}`}>{propertyMessage}</p>
+          )}
 
           {unmappedProjects.length > 0 && (
             <p className="flex flex-wrap items-center gap-1.5 text-[13px] text-ink-muted">

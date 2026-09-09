@@ -9,6 +9,7 @@ import {
   isSyncGscWideQueryEnabled,
 } from "@/lib/env";
 import {
+  listGscSites,
   queryAllPagesSearchAnalytics,
   queryUrlSearchAnalytics,
   type SearchAnalyticsRow,
@@ -31,6 +32,7 @@ import {
 } from "@/lib/repositories/content-url-monthly-metrics";
 import { getUrlAttributionForRange } from "@/lib/repositories/content-url-works";
 import { listActiveContentUrls, listContentUrlsByIds, type ContentUrl } from "@/lib/repositories/content-urls";
+import { getProjectGscPropertyMap } from "@/lib/repositories/project-gsc-properties";
 import { getBaselineSettings, getKpiSettings } from "@/lib/repositories/kpi-settings";
 import { upsertMemberScore, upsertProjectScore } from "@/lib/repositories/kpi-score-rollups";
 import {
@@ -48,6 +50,7 @@ import {
   finishRefreshRun,
   getRefreshRun,
   heartbeatRefreshWork,
+  markRefreshPublished,
   setRefreshPhase,
   splitRefreshItemForExactFallback,
   type RefreshRun,
@@ -57,10 +60,23 @@ import { upsertMemberRollup, upsertProjectRollup } from "@/lib/repositories/roll
 import { bulkUpsertUrlPerformanceScores, getScoringInputRowsForRange } from "@/lib/repositories/url-performance-score";
 import { baselineWindows, closedCalendarMonths, computeRangeDates, isRollingRange, type RangeKey } from "@/lib/ranges";
 import { normalizeForGscMatch } from "@/lib/sync/normalize-url";
+import { preflightRefreshUrls } from "@/lib/performance/refresh-preflight";
+import { refreshPublicationOutcome } from "@/lib/performance/refresh-publication";
 
-export async function startRefresh(triggeredBy: string | null, rangeKey: RangeKey): Promise<RefreshRun> {
+export async function startRefresh(accessToken: string, triggeredBy: string | null, rangeKey: RangeKey): Promise<RefreshRun> {
   const range = computeRangeDates(rangeKey);
-  return createRefreshRun(triggeredBy, range, await listActiveContentUrls());
+  const urls = await listActiveContentUrls();
+  const projectProperties = await getProjectGscPropertyMap();
+  // Fail local configuration before touching Google. A `content_urls` property
+  // is denormalised data, never a fallback for a missing project mapping.
+  const mappedUrls = preflightRefreshUrls(urls, range.endDate, projectProperties, new Set(projectProperties.values()));
+  const hasEligibleUrls = mappedUrls.some((url) => isEligible(url, range.endDate));
+  const sites = hasEligibleUrls ? await listGscSites(accessToken) : [];
+  return createRefreshRun(
+    triggeredBy,
+    range,
+    preflightRefreshUrls(mappedUrls, range.endDate, projectProperties, new Set(sites.map((site) => site.siteUrl))),
+  );
 }
 
 /**
@@ -175,12 +191,9 @@ async function fetchExactPeriod(
 async function processInternalItem(run: RefreshRun, urls: ContentUrl[]): Promise<UpsertPerformanceCacheInput[]> {
   return urls.map((url) => {
     if (!isEligible(url, run.end_date)) return cacheInput(run, url, computeGrowth(null, null, false));
-    return cacheInput(
-      run,
-      url,
-      { ...computeGrowth(null, null, true), dataStatus: "error" },
-      `No Search Console property mapped for project "${url.project}". Set it in Admin -> Settings.`,
-    );
+    // New runs are preflighted. An old queued run or an invariant breach must
+    // terminate without publishing an all-error replacement cache.
+    throw new Error(`Refresh configuration invariant failed: eligible URL has no Search Console property for project "${url.project}"`);
   });
 }
 
@@ -255,7 +268,7 @@ export async function processNextRefreshItem(accessToken: string, refreshRunId: 
       const empty = (await getRefreshRun(refreshRunId)) ?? current;
       return { run: empty, done: true, processedItem: false };
     }
-    if (current.status === "running" && current.completed_items >= current.total_items) await publishRefreshRun(current);
+    if (current.status === "running" && current.completed_items >= current.total_items) await finalizeCompletedRefreshRun(current);
     const run = (await getRefreshRun(refreshRunId)) ?? current;
     return { run, done: !["queued", "running"].includes(run.status), processedItem: false };
   }
@@ -327,7 +340,7 @@ export async function processNextRefreshItem(accessToken: string, refreshRunId: 
     });
     let updated = (await getRefreshRun(run.id)) ?? run;
     if (updated.completed_items >= updated.total_items) {
-      await publishRefreshRun(updated);
+      await finalizeCompletedRefreshRun(updated);
       updated = (await getRefreshRun(run.id)) ?? updated;
     }
     return { run: updated, done: !["queued", "running"].includes(updated.status), processedItem: true };
@@ -339,15 +352,39 @@ export async function processNextRefreshItem(accessToken: string, refreshRunId: 
   }
 }
 
+async function finalizeCompletedRefreshRun(run: RefreshRun): Promise<void> {
+  const outcome = refreshPublicationOutcome(run.total_urls, run.failed_urls);
+  if (!outcome.publish) {
+    await finishRefreshRun(
+      run.id,
+      outcome.status,
+      `${run.failed_urls} URL(s) were not published because the refresh snapshot has errors`,
+    );
+    return;
+  }
+  await publishRefreshRun(run);
+}
+
 async function publishRefreshRun(run: RefreshRun): Promise<void> {
   await withTransaction(async (client) => {
     const lockedResult = await client.query<RefreshRun>("select * from public.refresh_runs where id = $1 for update", [run.id]);
     const locked = lockedResult.rows[0];
     if (!locked || locked.status !== "running" || locked.completed_items < locked.total_items) return;
+    const outcome = refreshPublicationOutcome(locked.total_urls, locked.failed_urls);
+    if (!outcome.publish) {
+      await finishRefreshRun(
+        run.id,
+        outcome.status,
+        `${locked.failed_urls} URL(s) were not published because the refresh snapshot has errors`,
+        client,
+      );
+      return;
+    }
     const staged = await getStagedPerformanceCount(run.id, client);
     if (staged !== locked.total_urls) throw new Error(`Refresh snapshot incomplete: staged ${staged} of ${locked.total_urls} URLs`);
     await setRefreshPhase(run.id, "publishing", client);
     await publishStagedPerformanceCache(run.id, client);
+    await markRefreshPublished(run.id, client);
     await setRefreshPhase(run.id, "rollup", client);
     await computeAndStoreRollups(locked.range_key as RangeKey, locked.start_date, locked.end_date, client);
     if (isRollingRange(locked.range_key as RangeKey)) {
@@ -361,12 +398,7 @@ async function publishRefreshRun(run: RefreshRun): Promise<void> {
         await evaluateWarningsForClosedMonth({ actorId: "refresh", db: client });
       }
     }
-    await finishRefreshRun(
-      run.id,
-      locked.failed_urls > 0 ? "partial" : "success",
-      locked.failed_urls > 0 ? `${locked.failed_urls} URL(s) were published with errors` : undefined,
-      client,
-    );
+    await finishRefreshRun(run.id, "success", undefined, client);
   });
 }
 
