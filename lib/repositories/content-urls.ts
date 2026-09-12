@@ -49,8 +49,8 @@ export interface BulkUpsertContentUrlInput extends UpsertContentUrlInput {
   contentHash: string;
 }
 
-function executorQuery<T extends Record<string, unknown>>(db: DbExecutor | undefined, text: string, params?: unknown[]) {
-  return db ? db.query<T>(text, params).then((result) => result.rows) : query<T>(text, params);
+function executorQuery<T>(db: DbExecutor | undefined, text: string, params?: unknown[]): Promise<T[]> {
+  return db ? db.query(text, params).then((result) => result.rows as T[]) : query<T>(text, params);
 }
 
 export async function getContentHashMap(db?: DbExecutor): Promise<Map<string, { contentHash: string | null; isActive: boolean }>> {
@@ -181,8 +181,8 @@ export async function deactivateMissingContentUrls(seenHashes: string[], db?: Db
   return rows.length;
 }
 
-export async function listActiveContentUrls(): Promise<ContentUrl[]> {
-  return query<ContentUrl>("select * from public.content_urls where is_active = true order by project, member_name");
+export async function listActiveContentUrls(db?: DbExecutor): Promise<ContentUrl[]> {
+  return executorQuery<ContentUrl>(db, "select * from public.content_urls where is_active = true order by project, member_name");
 }
 
 export async function listContentUrlsByMemberEmail(email: string): Promise<ContentUrl[]> {

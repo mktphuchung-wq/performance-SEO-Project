@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, type DbExecutor } from "@/lib/db";
 
 export interface MemberAlias {
   member_name: string;
@@ -34,21 +34,55 @@ export async function getMemberAliasMap(): Promise<Map<string, string>> {
  * Returns null when nothing matches, which callers must read as "this person has
  * no work under review", not as an error.
  */
-export async function getMemberNameByEmail(email: string): Promise<string | null> {
-  const alias = await query<{ member_name: string }>(
-    "select member_name from public.member_aliases where lower(member_email) = lower($1) order by member_name limit 1",
-    [email],
-  );
-  if (alias[0]) return alias[0].member_name;
+export class MemberIdentityAmbiguityError extends Error {
+  readonly email: string;
+  readonly memberNames: string[];
 
-  const fromUrls = await query<{ member_name: string }>(
-    `select member_name from public.content_urls
-     where lower(member_email) = lower($1) and member_name <> ''
-     order by member_name
-     limit 1`,
+  constructor(email: string, memberNames: string[]) {
+    super(`Multiple canonical members are mapped to ${email}`);
+    this.name = "MemberIdentityAmbiguityError";
+    this.email = email;
+    this.memberNames = memberNames;
+  }
+}
+
+async function memberNamesForEmail(email: string, db?: DbExecutor): Promise<string[]> {
+  const run = async <T extends Record<string, unknown>>(text: string, params: unknown[]): Promise<T[]> =>
+    db ? (await db.query<T>(text, params)).rows : query<T>(text, params);
+  const rows = await run<{ member_name: string }>(
+    `select distinct member_name
+       from public.member_aliases
+      where lower(member_email) = lower($1) and member_name <> ''
+      order by member_name`,
     [email],
   );
-  return fromUrls[0]?.member_name ?? null;
+  if (rows.length > 0) return rows.map((row) => row.member_name);
+
+  const fallback = await run<{ member_name: string }>(
+    `select distinct member_name
+       from (
+         select member_name
+           from public.content_urls
+          where lower(member_email) = lower($1) and member_name <> ''
+         union
+         select member_name
+           from public.content_url_works
+          where is_active = true and lower(member_email) = lower($1) and member_name <> ''
+       ) names
+      order by member_name`,
+    [email],
+  );
+  return fallback.map((row) => row.member_name);
+}
+
+export async function getMemberNameByEmail(email: string, db?: DbExecutor): Promise<string | null> {
+  const names = await memberNamesForEmail(email, db);
+  if (names.length > 1) throw new MemberIdentityAmbiguityError(email, names);
+  return names[0] ?? null;
+}
+
+export async function resolveMemberNameForReport(email: string, db?: DbExecutor): Promise<string | null> {
+  return getMemberNameByEmail(email.trim().toLowerCase(), db);
 }
 
 export async function upsertMemberAlias(memberName: string, memberEmail: string): Promise<void> {

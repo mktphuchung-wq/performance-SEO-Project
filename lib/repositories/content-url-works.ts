@@ -133,6 +133,8 @@ export interface UrlAttributionRow {
   content_url_id: string;
   member_name: string;
   member_email: string | null;
+  work_type: string;
+  worked_at: string | null;
 }
 
 /**
@@ -147,25 +149,75 @@ export interface UrlAttributionRow {
  * One URL can therefore appear under several members. That double-counts on
  * purpose: it is per-member attribution, not a partition of the project total.
  */
+async function queryUrlAttributionForRange(
+  startDate: string,
+  endDate: string,
+  db: DbExecutor | undefined,
+  memberEmail: string | undefined,
+  includeInactive: boolean,
+): Promise<UrlAttributionRow[]> {
+  if (!includeInactive) {
+    const sql = `with in_window as (
+        select distinct w.content_url_id, w.member_name, w.member_email
+          from public.content_url_works w
+         where w.is_active = true and w.worked_at between $1 and $2 and w.member_name <> ''
+      )
+      select c.id as content_url_id, i.member_name, i.member_email, ''::text as work_type, null::date as worked_at
+        from public.content_urls c
+        join in_window i on i.content_url_id = c.id
+      union all
+      select c.id as content_url_id, c.member_name, c.member_email, c.work_type, c.worked_at
+        from public.content_urls c
+       where not exists (select 1 from in_window i where i.content_url_id = c.id)
+         and ($3::text is null or lower(c.member_email) = lower($3))`;
+    const params = [startDate, endDate, memberEmail ?? null];
+    return db ? (await db.query<UrlAttributionRow>(sql, params)).rows : query<UrlAttributionRow>(sql, params);
+  }
+
+  const sql = `with ranked_in_window as (
+      select w.content_url_id, w.member_name, w.member_email, w.work_type, w.worked_at,
+             row_number() over (
+               partition by w.content_url_id, w.member_name
+               order by w.worked_at desc nulls last, w.source_row_number desc nulls last, w.id desc
+             ) as rank
+        from public.content_url_works w
+       where w.worked_at between $1 and $2
+         and w.member_name <> ''
+         and ($4::boolean or w.is_active = true)
+    ), in_window as (
+      select content_url_id, member_name, member_email, work_type, worked_at
+        from ranked_in_window
+       where rank = 1
+    )
+    select c.id as content_url_id, i.member_name, i.member_email, i.work_type, i.worked_at
+      from public.content_urls c
+      join in_window i on i.content_url_id = c.id
+     where $3::text is null or lower(i.member_email) = lower($3) or i.member_email is null
+    union all
+    select c.id as content_url_id, c.member_name, c.member_email, c.work_type, c.worked_at
+      from public.content_urls c
+     where not exists (select 1 from in_window i where i.content_url_id = c.id)
+       and ($3::text is null or lower(c.member_email) = lower($3))`;
+  const params = [startDate, endDate, memberEmail ?? null, includeInactive];
+  return db ? (await db.query<UrlAttributionRow>(sql, params)).rows : query<UrlAttributionRow>(sql, params);
+}
+
 export async function getUrlAttributionForRange(
   startDate: string,
   endDate: string,
   db?: DbExecutor,
+  memberEmail?: string,
 ): Promise<UrlAttributionRow[]> {
-  const sql = `with in_window as (
-      select distinct w.content_url_id, w.member_name, w.member_email
-        from public.content_url_works w
-       where w.is_active = true and w.worked_at between $1 and $2 and w.member_name <> ''
-    )
-    select c.id as content_url_id, i.member_name, i.member_email
-      from public.content_urls c
-      join in_window i on i.content_url_id = c.id
-    union all
-    select c.id as content_url_id, c.member_name, c.member_email
-      from public.content_urls c
-     where not exists (select 1 from in_window i where i.content_url_id = c.id)`;
-  const params = [startDate, endDate];
-  return db ? (await db.query<UrlAttributionRow>(sql, params)).rows : query<UrlAttributionRow>(sql, params);
+  return queryUrlAttributionForRange(startDate, endDate, db, memberEmail, false);
+}
+
+export async function getHistoricalReportUrlAttributionForRange(
+  startDate: string,
+  endDate: string,
+  db?: DbExecutor,
+  memberEmail?: string,
+): Promise<UrlAttributionRow[]> {
+  return queryUrlAttributionForRange(startDate, endDate, db, memberEmail, true);
 }
 
 /**

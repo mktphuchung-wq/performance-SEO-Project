@@ -136,14 +136,13 @@ function previousPeriodOf(startDate: string, endDate: string): { previousStartDa
   return { previousStartDate, previousEndDate };
 }
 
-export function computeRangeDates(rangeKey: RangeKey, custom?: { startDate: string; endDate: string }): RangeDates {
-  const cutoff = dataCutoff();
-
+export function computeRangeDatesAtCutoff(
+  rangeKey: RangeKey,
+  cutoff: string,
+  custom?: { startDate: string; endDate: string },
+): RangeDates {
   const months = ROLLING_MONTHS[rangeKey];
   if (months) {
-    // Rolling window ending at the latest date Search Console has data for,
-    // compared against the window of equal length immediately before it. 1M/3M/6M
-    // all share this shape so their growth numbers mean the same thing.
     const endDate = cutoff;
     const startDate = addMonths(endDate, -months);
     return { rangeKey, startDate, endDate, ...previousPeriodOf(startDate, endDate) };
@@ -166,4 +165,8 @@ export function computeRangeDates(rangeKey: RangeKey, custom?: { startDate: stri
   }
 
   throw new Error(`Unknown range key: ${rangeKey}`);
+}
+
+export function computeRangeDates(rangeKey: RangeKey, custom?: { startDate: string; endDate: string }): RangeDates {
+  return computeRangeDatesAtCutoff(rangeKey, dataCutoff(), custom);
 }

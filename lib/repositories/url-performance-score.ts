@@ -150,6 +150,8 @@ export interface UrlScoreDisplayRow {
   url: string;
   project: string;
   member_name: string;
+  start_date: string;
+  end_date: string;
   project_type: string;
   score_state: string;
   score: number | null;
@@ -203,7 +205,7 @@ export async function listUrlScores(
   }
 
   return query<UrlScoreDisplayRow>(
-    `select s.content_url_id, c.url, c.project, c.member_name,
+    `select s.content_url_id, c.url, c.project, c.member_name, s.start_date, s.end_date,
             s.project_type, s.score_state, s.score, s.click_score, s.impression_score,
             s.click_ratio, s.impression_ratio, s.weight,
             s.baseline_clicks, s.baseline_impressions, s.baseline_sample_count,

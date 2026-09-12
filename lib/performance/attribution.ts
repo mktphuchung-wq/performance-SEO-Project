@@ -29,7 +29,13 @@ export function ownersOf(
   row: { content_url_id: string; member_name: string; member_email: string | null },
 ): UrlAttributionRow[] {
   return index.get(row.content_url_id) ?? [
-    { content_url_id: row.content_url_id, member_name: row.member_name, member_email: row.member_email },
+    {
+      content_url_id: row.content_url_id,
+      member_name: row.member_name,
+      member_email: row.member_email,
+      work_type: "",
+      worked_at: null,
+    },
   ];
 }
 

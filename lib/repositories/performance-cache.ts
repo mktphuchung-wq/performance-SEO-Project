@@ -232,6 +232,8 @@ export interface UrlPerformanceRow {
   range_key: string;
   start_date: string;
   end_date: string;
+  previous_start_date: string | null;
+  previous_end_date: string | null;
   clicks: number | null;
   impressions: number | null;
   ctr: number | null;
@@ -269,7 +271,7 @@ export interface UrlPerformanceRow {
 }
 
 /** The columns every URL listing shares, so the three queries cannot drift apart. */
-const URL_PERFORMANCE_COLUMNS = `c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date,
+const URL_PERFORMANCE_COLUMNS = `c.id, c.id as content_url_id, p.range_key, p.start_date, p.end_date, p.previous_start_date, p.previous_end_date,
             p.clicks, p.impressions, p.ctr, p.position,
             p.previous_clicks, p.previous_impressions, p.previous_ctr, p.previous_position,
             p.click_delta, p.click_growth_pct, p.impression_delta, p.impression_growth_pct,

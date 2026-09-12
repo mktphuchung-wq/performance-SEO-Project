@@ -409,12 +409,12 @@ export async function computeAndStoreRollups(rangeKey: RangeKey, startDate: stri
   for (const [memberName, memberRows] of byMember) {
     await upsertMemberRollup(
       memberEmails.get(memberName) ?? null,
-      { key: memberName, rangeKey, startDate, endDate, ...summarize(memberRows) },
+      { key: memberName, rangeKey, startDate, endDate, ...summarizePerformanceRows(memberRows) },
       db,
     );
   }
   for (const [project, projectRows] of byProject) {
-    await upsertProjectRollup({ key: project, rangeKey, startDate, endDate, ...summarize(projectRows) }, db);
+    await upsertProjectRollup({ key: project, rangeKey, startDate, endDate, ...summarizePerformanceRows(projectRows) }, db);
   }
 }
 
@@ -554,7 +554,7 @@ export async function computeAndStoreScores(rangeKey: RangeKey, startDate: strin
  * same arithmetic over the same rows. What stays local is what only a rollup
  * has: CTR, average position, and the growth_status tallies.
  */
-function summarize(rows: Array<{
+export function summarizePerformanceRows(rows: Array<{
   clicks: number | null; impressions: number | null; ctr: number | null; position: number | null;
   previous_clicks: number | null; previous_impressions: number | null; growth_status: string; data_status: string;
 }>) {
