@@ -5,6 +5,8 @@ import {
   serializeMemberReportCsv,
   MEMBER_REPORT_MONTH_RE,
 } from "@/lib/reports/member-csv";
+import { serializeMemberReportXlsx } from "@/lib/reports/member-xlsx";
+import XlsxPopulate from "xlsx-populate";
 import {
   MemberReportError,
   matchesRequestedAttribution,
@@ -16,6 +18,7 @@ import {
   MEMBER_REPORT_RANGE_KEYS,
   publishMemberReportSnapshot,
   getCompleteMemberReportSnapshot,
+  getCompleteMemberReportSnapshotForMember,
 } from "@/lib/repositories/member-report-snapshots";
 import { getMemberNameByEmail } from "@/lib/repositories/member-aliases";
 import { getPool } from "@/lib/db";
@@ -317,6 +320,24 @@ const snapshot = buildSnapshot(allUrls);
       new Map(),
     ),
   );
+  check(
+    "name-only identity accepts a matching canonical member",
+    matchesRequestedAttribution(
+      { member_name: "Nguyễn Văn A", member_email: null },
+      null,
+      "Nguyễn Văn A",
+      aliases,
+    ),
+  );
+  check(
+    "name-only identity rejects a different member",
+    !matchesRequestedAttribution(
+      { member_name: "Other Member", member_email: null },
+      null,
+      "Nguyễn Văn A",
+      aliases,
+    ),
+  );
 }
 
 console.log("\n§13 — pure serializer / slug / windows / completeness / growth assertions");
@@ -331,7 +352,7 @@ console.log("\n§13 — pure serializer / slug / windows / completeness / growth
   check("§13.1 — 5 data lines in CSV (one per URL)", dataLines.length === 5);
   check(
     "§13.1 — header field count matches data field count",
-    headerFields.length === 132 && dataLines.every((l) => parseCsvLine(l).length === 132),
+    headerFields.length === 133 && dataLines.every((l) => parseCsvLine(l).length === 133),
   );
 }
 
@@ -347,25 +368,25 @@ console.log("\n§13 — pure serializer / slug / windows / completeness / growth
   const noDataCells = parseCsvLine(noDataRow);
 
   const numericHeaders = [
-    "1m_clicks", "1m_impressions", "1m_ctr", "1m_position",
-    "1m_previous_clicks", "1m_previous_impressions",
-    "1m_click_delta", "1m_click_growth_pct",
-    "1m_impression_delta", "1m_impression_growth_pct",
-    "3m_clicks", "3m_impressions", "3m_ctr", "3m_position",
-    "3m_previous_clicks", "3m_previous_impressions",
-    "3m_click_delta", "3m_click_growth_pct",
-    "3m_impression_delta", "3m_impression_growth_pct",
-    "6m_clicks", "6m_impressions", "6m_ctr", "6m_position",
-    "6m_previous_clicks", "6m_previous_impressions",
-    "6m_click_delta", "6m_click_growth_pct",
-    "6m_impression_delta", "6m_impression_growth_pct",
+    "url_1m_clicks", "url_1m_impressions", "url_1m_ctr", "url_1m_position",
+    "url_1m_previous_clicks", "url_1m_previous_impressions",
+    "url_1m_click_delta", "url_1m_click_growth_pct",
+    "url_1m_impression_delta", "url_1m_impression_growth_pct",
+    "url_3m_clicks", "url_3m_impressions", "url_3m_ctr", "url_3m_position",
+    "url_3m_previous_clicks", "url_3m_previous_impressions",
+    "url_3m_click_delta", "url_3m_click_growth_pct",
+    "url_3m_impression_delta", "url_3m_impression_growth_pct",
+    "url_6m_clicks", "url_6m_impressions", "url_6m_ctr", "url_6m_position",
+    "url_6m_previous_clicks", "url_6m_previous_impressions",
+    "url_6m_click_delta", "url_6m_click_growth_pct",
+    "url_6m_impression_delta", "url_6m_impression_growth_pct",
   ];
   for (const h of numericHeaders) {
     const idx = headerIdx[h];
     check(`§13.2 — ${h} is empty string, not "0"`, noDataCells[idx] === "", `got "${noDataCells[idx]}"`);
   }
-  check("§13.2 — 1m_trend is 'no_data'", noDataCells[headerIdx["1m_trend"]] === "no_data");
-  check("§13.2 — 1m_data_status is 'no_data'", noDataCells[headerIdx["1m_data_status"]] === "no_data");
+  check("§13.2 — url_1m_trend is 'no_data'", noDataCells[headerIdx["url_1m_trend"]] === "no_data");
+  check("§13.2 — url_1m_data_status is 'no_data'", noDataCells[headerIdx["url_1m_data_status"]] === "no_data");
 }
 
 {
@@ -381,8 +402,8 @@ console.log("\n§13 — pure serializer / slug / windows / completeness / growth
   });
   assert(urlALine, "url-a row not found");
   const urlACells = parseCsvLine(urlALine);
-  check("§13.3 — url-a 1m_click_growth_pct === 100 (prev=0, cur>0)", urlACells[headerIdx["1m_click_growth_pct"]] === "100");
-  check("§13.3 — url-a 1m_click_delta === 5", urlACells[headerIdx["1m_click_delta"]] === "5");
+  check("§13.3 — url-a url_1m_click_growth_pct === 100 (prev=0, cur>0)", urlACells[headerIdx["url_1m_click_growth_pct"]] === "100");
+  check("§13.3 — url-a url_1m_click_delta === 5", urlACells[headerIdx["url_1m_click_delta"]] === "5");
 }
 
 {
@@ -483,6 +504,7 @@ console.log("\n§13 — pure serializer / slug / windows / completeness / growth
   const lines = csv.split(/\r\n/).filter((l) => l.length > 0);
   const headerLine = headerLineOf(lines);
   const headerFields = parseCsvLine(headerLine);
+  const headerIdx = headerIndexOf(headerFields);
   check("§13.9 — CSV starts with BOM", csv.charCodeAt(0) === 0xfeff);
   check(
     "§13.9 — first identity headers are correct",
@@ -490,12 +512,14 @@ console.log("\n§13 — pure serializer / slug / windows / completeness / growth
       headerFields[1] === "snapshot_created_at" &&
       headerFields[2] === "member_name" &&
       headerFields[3] === "member_email" &&
-      headerFields[4] === "project" &&
-      headerFields[5] === "url",
+      headerFields[4] === "content_url_id" &&
+      headerFields[5] === "project" &&
+      headerFields[6] === "url",
   );
-  check("§13.9 — CSV has 1m_clicks header", headerFields.includes("1m_clicks"));
-  check("§13.9 — CSV has 3m_clicks header", headerFields.includes("3m_clicks"));
-  check("§13.9 — CSV has 6m_clicks header", headerFields.includes("6m_clicks"));
+  check("§13.9 — CSV headers are unique", new Set(headerFields).size === headerFields.length);
+  check("§13.9 — CSV separates member and URL headers", headerFields.includes("member_1m_clicks") && headerFields.includes("url_1m_clicks"));
+  check("§13.9 — CSV includes content_url_id", headerFields.includes("content_url_id"));
+  check("§13.9 — snapshot timestamp is ISO 8601", /^2026-09-01T00:00:00\.000Z$/.test(parseCsvLine(lines[1])[headerIdx.snapshot_created_at]));
   check("§13.9 — CSV ends with CRLF", csv.endsWith("\r\n"));
 }
 
@@ -524,15 +548,26 @@ console.log("\n§13 — pure serializer / slug / windows / completeness / growth
   );
 
   const firstDataCells = parseCsvLine(csvDataLines[0]);
-  const memberSummaryClicksIndex = { last_1_month: 12 + 5, last_3_months: 12 + 21 + 5, last_6_months: 12 + 42 + 5 };
+  const memberSummaryClickHeader = { last_1_month: "member_1m_clicks", last_3_months: "member_3m_clicks", last_6_months: "member_6m_clicks" };
   for (const s of dto.summaries) {
     const snapshotSummary = snapshot.summaries.find((sr) => sr.range_key === s.rangeKey);
-    const csvCell = Number(firstDataCells[memberSummaryClicksIndex[s.rangeKey]]);
+    const csvCell = Number(firstDataCells[headerIdx[memberSummaryClickHeader[s.rangeKey]]]);
     check(
       `§13.10 — DTO ${s.rangeKey} clicks === snapshot summary clicks === CSV cell`,
       s.clicks === snapshotSummary.clicks && snapshotSummary.clicks === csvCell,
     );
   }
+}
+
+{
+  const xlsx = await serializeMemberReportXlsx(snapshot);
+  const workbook = await XlsxPopulate.fromDataAsync(xlsx);
+  const summarySheet = workbook.sheet("Summary");
+  const detailsSheet = workbook.sheet("URL details");
+  check("§13.11 — XLSX has Summary and URL details sheets", Boolean(summarySheet) && Boolean(detailsSheet));
+  check("§13.11 — Summary uses the snapshot matrix", summarySheet.cell("A6").value() === "Metric" && summarySheet.cell("B7").value() === 50);
+  check("§13.11 — URL details keeps one row per URL", detailsSheet.cell("A11").value() === "Content URL ID" && detailsSheet.cell("A12").value() !== null);
+  check("§13.11 — URL details range metadata is not repeated in URL rows", detailsSheet.cell("A6").value() === "Range" && detailsSheet.cell("J11").value() === "Last 1 month clicks");
 }
 
 {
@@ -596,8 +631,8 @@ if (canDb) {
     const memberEmail = `${memberName}@test.local`;
 
     const monthARows = MEMBER_REPORT_RANGE_KEYS.flatMap((rk) => [
-      makeRow("url-imm-a1", rk, { clicks: 200, impressions: 1000, data_status: "ok", growth_status: "growing", weight: 100, score_state: "normal", kpi_score: 75 }),
-      makeRow("url-imm-a2", rk, { clicks: 50, impressions: 200, data_status: "ok", growth_status: "stable", weight: 60, score_state: "normal", kpi_score: 45 }),
+      makeRow("00000000-0000-4000-8000-000000000001", rk, { member_name: memberName, member_email: memberEmail, clicks: 200, impressions: 1000, data_status: "ok", growth_status: "growing", weight: 100, score_state: "normal", kpi_score: 75 }),
+      makeRow("00000000-0000-4000-8000-000000000002", rk, { member_name: memberName, member_email: memberEmail, clicks: 50, impressions: 200, data_status: "ok", growth_status: "stable", weight: 60, score_state: "normal", kpi_score: 45 }),
     ]);
     const snapA = buildSnapshot(monthARows);
     snapA.report.member_name = memberName;
@@ -621,7 +656,7 @@ if (canDb) {
     const beforeAUrlCount = beforeA.urls.length;
 
     const monthBRows = MEMBER_REPORT_RANGE_KEYS.flatMap((rk) => [
-      makeRow("url-imm-b1", rk, { clicks: 10, impressions: 50, data_status: "ok", growth_status: "growing", weight: 30, score_state: "normal", kpi_score: 30 }),
+      makeRow("00000000-0000-4000-8000-000000000003", rk, { member_name: memberName, member_email: memberEmail, clicks: 10, impressions: 50, data_status: "ok", growth_status: "growing", weight: 30, score_state: "normal", kpi_score: 30 }),
     ]);
     const snapB = buildSnapshot(monthBRows);
     snapB.report.member_name = memberName;
@@ -648,19 +683,36 @@ if (canDb) {
     check("§13.6 — re-publish month A keeps same snapshot id", afterA2.report.id === snapAId);
     check("§13.6 — re-publish month A same summary values", afterA2.summaries.find((s) => s.range_key === "last_1_month").clicks === beforeASummaryClicks);
 
+    const nameOnlyRows = MEMBER_REPORT_RANGE_KEYS.flatMap((rk) => [
+      makeRow("00000000-0000-4000-8000-000000000004", rk, { member_name: memberName, member_email: null, clicks: 15, impressions: 75 }),
+    ]);
+    const nameOnlySnapshot = buildSnapshot(nameOnlyRows);
+    nameOnlySnapshot.report.member_name = memberName;
+    nameOnlySnapshot.report.member_email = null;
+    const nameOnlyResult = await publishMemberReportSnapshot({
+      reportMonth: "2025-03",
+      memberName,
+      memberEmail: null,
+      summaries: nameOnlySnapshot.summaries.map((s) => ({ ...s, report_snapshot_id: undefined })),
+      urls: nameOnlyRows.map((row) => ({
+        ...row,
+        member_name: memberName,
+        member_email: null,
+        report_snapshot_id: undefined,
+      })),
+    });
+    check("§13.6 — name-only snapshot is created without an email alias", nameOnlyResult.created === true);
+    const nameOnlyRead = await getCompleteMemberReportSnapshotForMember({ memberName }, "2025-03");
+    check("§13.6 — name-only snapshot can be read by member name", nameOnlyRead?.report.member_email === null);
+
     await getPool().query("delete from public.member_report_summary_snapshots where report_snapshot_id in (select id from public.member_report_snapshots where member_name = $1)", [memberName]);
     await getPool().query("delete from public.member_report_url_snapshots where report_snapshot_id in (select id from public.member_report_snapshots where member_name = $1)", [memberName]);
     await getPool().query("delete from public.member_report_snapshots where member_name = $1", [memberName]);
   }
 
   {
-    try {
-      await getMemberNameByEmail("nobody-ever-exists@example.invalid");
-      check("§13.7 — invalid email throws", false);
-    } catch (e) {
-      check("§13.7 — MEMBER_NOT_FOUND via DB is MemberReportError", e instanceof MemberReportError && e.name === "MemberReportError");
-      check("§13.7 — MEMBER_NOT_FOUND code === 'MEMBER_NOT_FOUND'", e.code === "MEMBER_NOT_FOUND");
-    }
+    const missingMember = await getMemberNameByEmail("nobody-ever-exists@example.invalid");
+    check("§13.7 — unmapped email resolves to null", missingMember === null);
   }
 }
 

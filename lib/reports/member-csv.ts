@@ -13,7 +13,7 @@ const RANGE_KEYS: MemberReportRangeKey[] = [
   "last_6_months",
 ];
 
-const SUFFIX: Record<MemberReportRangeKey, string> = {
+const RANGE_SUFFIX: Record<MemberReportRangeKey, string> = {
   last_1_month: "1m",
   last_3_months: "3m",
   last_6_months: "6m",
@@ -32,6 +32,13 @@ export function memberReportFilename(
   reportMonth: string,
 ): string {
   return `seo-member-report-${slug(memberName)}-${reportMonth}.csv`;
+}
+
+export function memberReportXlsxFilename(
+  memberName: string,
+  reportMonth: string,
+): string {
+  return `seo-member-report-${slug(memberName)}-${reportMonth}.xlsx`;
 }
 
 const NEEDS_QUOTE_RE = /[",\r\n]/;
@@ -60,6 +67,15 @@ function cell(value: unknown): string {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") return String(value);
   return csvEscape(neutralize(String(value)));
+}
+
+function isoTimestamp(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return String(value);
 }
 
 function csvRow(values: unknown[]): string {
@@ -98,6 +114,7 @@ const IDENTITY_HEADERS = [
   "snapshot_created_at",
   "member_name",
   "member_email",
+  "content_url_id",
   "project",
   "url",
   "work_type",
@@ -222,7 +239,7 @@ export function serializeMemberReportCsv(
   const reportMonth = snapshot.report.report_month.slice(0, 7);
   const memberName = snapshot.report.member_name;
   const memberEmail = snapshot.report.member_email;
-  const createdAt = snapshot.report.created_at;
+  const createdAt = isoTimestamp(snapshot.report.created_at);
 
   const summaryIndex = buildSummaryIndex(snapshot.summaries);
   const urlIndex = buildUrlIndex(snapshot.urls);
@@ -240,8 +257,8 @@ export function serializeMemberReportCsv(
 
   const headers: string[] = [
     ...IDENTITY_HEADERS,
-    ...RANGE_KEYS.flatMap((rk) => memberSummaryHeaders(SUFFIX[rk])),
-    ...RANGE_KEYS.flatMap((rk) => urlRangeHeaders(SUFFIX[rk])),
+    ...RANGE_KEYS.flatMap((rk) => memberSummaryHeaders(`member_${RANGE_SUFFIX[rk]}`)),
+    ...RANGE_KEYS.flatMap((rk) => urlRangeHeaders(`url_${RANGE_SUFFIX[rk]}`)),
   ];
 
   const lines: string[] = [headers.join(",")];
@@ -253,6 +270,7 @@ export function serializeMemberReportCsv(
       createdAt,
       memberName,
       memberEmail,
+      anchor.content_url_id,
       anchor.project,
       anchor.url,
       anchor.work_type,

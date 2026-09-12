@@ -195,15 +195,36 @@ export async function getCompleteMemberReportSnapshot(
   memberIdentity: string,
   reportMonth: string,
 ): Promise<CompleteMemberReportSnapshot | null> {
+  const byEmail = memberIdentity.includes("@");
+  return getCompleteMemberReportSnapshotForMember(
+    byEmail ? { memberEmail: memberIdentity } : { memberName: memberIdentity },
+    reportMonth,
+  );
+}
+
+export interface MemberReportIdentity {
+  memberName?: string | null;
+  memberEmail?: string | null;
+}
+
+export async function getCompleteMemberReportSnapshotForMember(
+  identity: MemberReportIdentity,
+  reportMonth: string,
+): Promise<CompleteMemberReportSnapshot | null> {
+  const memberName = identity.memberName?.trim() || null;
+  const memberEmail = identity.memberEmail?.trim().toLowerCase() || null;
   return withTransaction(async (client) => {
     await client.query("set transaction isolation level repeatable read read only");
-    const byEmail = memberIdentity.includes("@");
     const rows = resultRows(await client.query<MemberReportSnapshotRow>(
       `select id, report_month, member_name, member_email, completion_state, completed_at, created_at
        from public.member_report_snapshots
-       where report_month = $2 and completion_state = 'complete'
-         and (($3 and lower(member_email) = lower($1)) or (not $3 and member_name = $1))`,
-      [memberIdentity, monthStart(reportMonth), byEmail],
+       where report_month = $1 and completion_state = 'complete'
+         and (($2::text is not null and lower(member_email) = lower($2))
+           or ($3::text is not null and member_name = $3))
+       order by case when $2::text is not null and lower(member_email) = lower($2) then 0 else 1 end,
+                created_at desc
+       limit 1`,
+      [monthStart(reportMonth), memberEmail, memberName],
     ));
     const report = rows[0];
     if (!report) return null;
