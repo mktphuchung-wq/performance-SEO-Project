@@ -7,7 +7,7 @@ This guide classifies the commands currently exposed by `package.json` and the m
 - Run database commands only when `DATABASE_URL` is confirmed to point to a dedicated development or staging database. These scripts load `.env.local`; do not infer the target from a command name or from whether a script usually rolls back.
 - Do not combine all verifiers into one command. Some use fixture cleanup, and warning evaluation and KPI recomputation write application data.
 - A script that prints `SKIPPED` because credentials or fixture conditions are missing has not passed its intended check.
-- Keep generated worktree, Playwright, Next, and TypeScript output out of lint/typecheck input. The shared ignore/exclude rules cover only those local generated directories; application source remains in scope.
+- Keep generated worktree, Playwright, Next, and TypeScript output out of lint/typecheck input. The shared ignore/exclude rules cover `.claude/worktrees/`, `.kilo/worktrees/`, `.playwright-cli/`, and `output/`; application source remains in scope.
 
 ## Offline checks
 

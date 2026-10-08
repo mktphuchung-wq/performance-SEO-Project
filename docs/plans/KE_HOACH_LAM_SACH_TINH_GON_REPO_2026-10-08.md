@@ -8,7 +8,7 @@ Làm repo dễ tìm, dễ bảo trì và dễ kiểm tra hơn, đồng thời gi
 
 **Trạng thái tại thời điểm lập kế hoạch (2026-10-08): PLAN ONLY.** Khi đó lượt làm việc chỉ khảo sát; chưa xóa/di chuyển file cũ, sửa mã nguồn, đổi dependency, chạy migration hay triển khai.
 
-**Cập nhật sau thực thi (2026-10-08): PARTIAL.** Đã chuyển phần lớn tài liệu, thêm chỉ mục và quy tắc ignore/exclude cho artifact local, sửa metadata hai worktree cũ và chạy các kiểm tra offline. Hai tài liệu vốn ở `docs/` vẫn được giữ nguyên tại chỗ vì ACL hiện tại từ chối quyền đổi tên; chi tiết trong [biên bản thực thi](../operations/repo-cleanup-2026-10-08.md). Typecheck và verifier offline đạt; lint còn lỗi trong mã app hiện hữu. Build, kiểm tra DB, auth/trình duyệt và clone sạch chưa được xác minh vì đích `.env.local`/môi trường hosting chưa được xác nhận.
+**Cập nhật sau thực thi (2026-10-08): PARTIAL.** Đã chuyển phần lớn tài liệu, thêm chỉ mục và quy tắc ignore/exclude cho artifact local, sửa metadata hai worktree cũ và bảo toàn thêm một worktree `.kilo/` phát hiện khi chạy lint. Hai tài liệu vốn ở `docs/` vẫn được giữ nguyên tại chỗ vì ACL hiện tại từ chối quyền đổi tên; chi tiết trong [biên bản thực thi](../operations/repo-cleanup-2026-10-08.md). Typecheck và verifier offline đạt; lint còn lỗi trong mã app hiện hữu. Build, kiểm tra DB, auth/trình duyệt và clone sạch chưa được xác minh vì đích `.env.local`/môi trường hosting chưa được xác nhận.
 
 Phạm vi kế hoạch:
 
