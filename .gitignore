@@ -43,5 +43,6 @@ next-env.d.ts
 
 # local generated artifacts and linked worktrees
 /.claude/worktrees/
+/.kilo/worktrees/
 /.playwright-cli/
 /output/
