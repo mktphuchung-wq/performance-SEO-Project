@@ -815,7 +815,7 @@ Chạy `npm run typecheck && npm run lint` sạch trước khi báo hoàn thành
 ## 13. Prompt bàn giao cho Codex
 
 ```
-Đọc file PERFORMANCE_SCORE_SPEC_v2.md ở gốc repo trước khi code. Đây là spec
+Đọc file `docs/specs/PERFORMANCE_SCORE_SPEC_v2.md` trước khi code. Đây là spec
 đầy đủ, đã đối chiếu với schema/convention thật của repo — không cần đoán,
 nhưng hãy tự chạy lại các lệnh khám phá ở mục 0.1 điểm 4 để xác nhận schema
 hiện tại vẫn khớp trước khi viết migration.

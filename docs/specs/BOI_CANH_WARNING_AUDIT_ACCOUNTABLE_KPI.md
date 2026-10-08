@@ -539,7 +539,7 @@ Team cần chốt target trước khi bắt đầu shadow mode. Các metric tố
 ## 18. Tài liệu/code tham chiếu
 
 - `C:\Users\user\Downloads\Dac_Ta_Warning_Audit_Content_V2.md`
-- `PERFORMANCE_SCORE_SPEC_v2.md`
+- `docs/specs/PERFORMANCE_SCORE_SPEC_v2.md`
 - `lib/performance/score.ts`
 - `lib/performance/refresh.ts`
 - `lib/performance/composite-score.ts`
@@ -550,4 +550,3 @@ Team cần chốt target trước khi bắt đầu shadow mode. Các metric tố
 - `migrations/004_kpi_performance_score.sql`
 - `migrations/011_work_events.sql`
 - `migrations/013_baseline_history.sql`
-

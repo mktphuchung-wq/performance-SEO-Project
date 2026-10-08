@@ -1,5 +1,5 @@
 // Arithmetic self-check for the Member × Range opposite-sign rule — the cases in
-// DAC_TA_KPI_THANH_VIEN_CHI_SO_TRAI_DAU.md §4.3 and §9-P0.6, run against the real
+// docs/specs/DAC_TA_KPI_THANH_VIEN_CHI_SO_TRAI_DAU.md §4.3 and §9-P0.6, run against the real
 // functions rather than a transcription of them. No database, no network:
 // `node scripts/verify-member-score.mjs`.
 //

@@ -4,6 +4,11 @@ Internal dashboard for the SEO team. Tracks which URLs each member worked on (so
 from a Google Sheet) and how those URLs perform in Google Search Console — per URL,
 then rolled up per member and per project.
 
+## Documentation
+
+See [the documentation index](docs/README.md) for current specifications,
+operational checks, plans, and review records.
+
 ## Ranges
 
 `last_1_month / last_3_months / last_6_months / all_time / custom`.
