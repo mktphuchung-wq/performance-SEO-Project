@@ -15,7 +15,9 @@ import {
   formatScore,
 } from "@/lib/format";
 import type { MemberReportReadDto } from "@/lib/reports/member-report";
-import { MEMBER_REPORT_RANGE_KEYS, type MemberReportRangeKey } from "@/lib/repositories/member-report-snapshots";
+
+const MEMBER_REPORT_RANGE_KEYS = ["last_1_month", "last_3_months", "last_6_months"] as const;
+type MemberReportRangeKey = (typeof MEMBER_REPORT_RANGE_KEYS)[number];
 
 interface MembersResponse { rows: Array<{ member_name: string; member_email: string | null }> }
 
@@ -133,23 +135,38 @@ function SummaryRow({
 export default function MemberReportPage() {
   const router = useRouter();
   const [month, setMonth] = useState(latestClosedMonth);
-  const [memberEmail, setMemberEmail] = useState("");
+  const [memberName, setMemberName] = useState("");
   const [members, setMembers] = useState<Array<{ member_name: string; member_email: string | null }>>([]);
   const [loadingMembers, setLoadingMembers] = useState(true);
+  const [memberLoadError, setMemberLoadError] = useState<string | null>(null);
   const [report, setReport] = useState<MemberReportReadDto | null>(null);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [snapshotMissing, setSnapshotMissing] = useState(false);
+  const selectedMember = members.find((member) => member.member_name === memberName);
+  const selectedMemberEmail = selectedMember?.member_email?.trim() || null;
+
+  const reportQuery = useCallback(() => {
+    const params = new URLSearchParams({ month, memberName });
+    if (selectedMemberEmail) params.set("memberEmail", selectedMemberEmail);
+    return params.toString();
+  }, [memberName, month, selectedMemberEmail]);
 
   useEffect(() => {
     let cancelled = false;
     fetchJson<MembersResponse>("/api/admin/members", {}, isMembersResponse)
       .then((data) => {
-        if (!cancelled) setMembers(data.rows);
+        if (!cancelled) {
+          setMembers(data.rows);
+          setMemberLoadError(null);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setMembers([]);
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setMembers([]);
+          setMemberLoadError(messageOf(err));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingMembers(false);
@@ -158,12 +175,12 @@ export default function MemberReportPage() {
   }, []);
 
   const loadReport = useCallback(() => {
-    if (!month || !memberEmail) return;
+    if (!month || !memberName) return;
     setLoading(true);
     setError(null);
     setSnapshotMissing(false);
     fetchJson<MemberReportReadDto>(
-      `/api/admin/reports/members?month=${encodeURIComponent(month)}&memberEmail=${encodeURIComponent(memberEmail)}`,
+      `/api/admin/reports/members?${reportQuery()}`,
     )
       .then((data) => { setReport(data); })
       .catch((err: unknown) => {
@@ -176,12 +193,12 @@ export default function MemberReportPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, [month, memberEmail]);
+  }, [memberName, month, reportQuery]);
 
   const handleView = useCallback(() => { loadReport(); }, [loadReport]);
 
   const handleGenerate = useCallback(() => {
-    if (!month || !memberEmail) return;
+    if (!month || !memberName) return;
     setGenerating(true);
     setError(null);
     setSnapshotMissing(false);
@@ -190,22 +207,20 @@ export default function MemberReportPage() {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month, memberEmail }),
+        body: JSON.stringify({ month, memberName, memberEmail: selectedMemberEmail }),
       },
     )
       .then((data) => { setReport(data); })
       .catch((err: unknown) => { setError(messageOf(err)); })
       .finally(() => setGenerating(false));
-  }, [month, memberEmail]);
+  }, [memberName, month, selectedMemberEmail]);
 
-  const handleExport = useCallback(() => {
-    if (!month || !memberEmail) return;
-    router.push(`/api/admin/reports/members/export?month=${encodeURIComponent(month)}&memberEmail=${encodeURIComponent(memberEmail)}`);
-  }, [month, memberEmail, router]);
+  const handleExport = useCallback((format: "csv" | "xlsx") => {
+    if (!month || !memberName) return;
+    router.push(`/api/admin/reports/members/export?${reportQuery()}&format=${format}`);
+  }, [memberName, month, reportQuery, router]);
 
   const urlRows = useMemo(() => (report ? groupUrls(report.urls) : []), [report]);
-
-  const selectedMember = members.find((m) => m.member_email === memberEmail);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-5 py-6">
@@ -229,31 +244,38 @@ export default function MemberReportPage() {
           </Field>
           <Field label="Member">
             <select
-              value={memberEmail}
-              onChange={(e) => { setMemberEmail(e.target.value); setReport(null); setSnapshotMissing(false); setError(null); }}
+              value={memberName}
+              onChange={(e) => { setMemberName(e.target.value); setReport(null); setSnapshotMissing(false); setError(null); }}
               disabled={loadingMembers}
               className={inputClass}
               aria-label="Select member"
             >
-              <option value="">{loadingMembers ? "Loading…" : "Choose a member"}</option>
+              <option value="">{loadingMembers ? "Loading…" : members.length === 0 ? "No members available" : "Choose a member"}</option>
               {members.map((m) => (
-                <option key={m.member_email ?? m.member_name} value={m.member_email ?? ""}>
+                <option key={m.member_name} value={m.member_name}>
                   {m.member_name}{m.member_email ? ` (${m.member_email})` : ""}
                 </option>
               ))}
             </select>
           </Field>
-          <Button onClick={handleView} disabled={!month || !memberEmail || loading || generating}>
+          <Button onClick={handleView} disabled={!month || !memberName || loading || generating}>
             View report
           </Button>
-          <Button onClick={handleGenerate} disabled={!month || !memberEmail || generating || loading} variant="secondary">
+          <Button onClick={handleGenerate} disabled={!month || !memberName || generating || loading} variant="secondary">
             {generating ? "Generating…" : "Generate snapshot"}
           </Button>
-          <Button onClick={handleExport} disabled={!report} variant="secondary">
-            Export CSV
+          <Button onClick={() => handleExport("xlsx")} disabled={!report} variant="secondary">
+            Export Excel
+          </Button>
+          <Button onClick={() => handleExport("csv")} disabled={!report} variant="secondary">
+            Export CSV (raw)
           </Button>
         </div>
       </Card>
+
+      {memberLoadError && (
+        <p className="text-[13px] text-negative">Could not load members: {memberLoadError}</p>
+      )}
 
       {error && (
         <p className="text-[13px] text-negative">{error}</p>
@@ -265,7 +287,7 @@ export default function MemberReportPage() {
         </Card>
       )}
 
-      {!loading && !error && !report && snapshotMissing && (
+      {!loading && !error && !memberLoadError && !report && snapshotMissing && (
         <Card>
           <EmptyState
             title="No snapshot for this month"
@@ -274,7 +296,7 @@ export default function MemberReportPage() {
         </Card>
       )}
 
-      {!loading && !error && !report && !snapshotMissing && (
+      {!loading && !error && !memberLoadError && !report && !snapshotMissing && (
         <Card>
           <EmptyState
             title="Select a month and member"

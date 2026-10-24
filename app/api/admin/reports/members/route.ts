@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth/next";
 import { ApiRouteError, runJson } from "@/lib/api/route-response";
 import { authOptions } from "@/lib/auth";
-import { getCompleteMemberReportSnapshot } from "@/lib/repositories/member-report-snapshots";
+import { getCompleteMemberReportSnapshotForMember } from "@/lib/repositories/member-report-snapshots";
 import {
   generateMemberReport,
   MemberReportError,
@@ -9,16 +9,17 @@ import {
 } from "@/lib/reports/member-report";
 import { MEMBER_REPORT_MONTH_RE } from "@/lib/reports/member-csv";
 
-function readReportQuery(url: URL): { month: string; memberEmail: string } {
+function readReportQuery(url: URL): { month: string; memberName: string | null; memberEmail: string | null } {
   const month = url.searchParams.get("month") ?? "";
-  const memberEmail = url.searchParams.get("memberEmail") ?? "";
+  const memberName = url.searchParams.get("memberName")?.trim() || null;
+  const memberEmail = url.searchParams.get("memberEmail")?.trim().toLowerCase() || null;
   if (!MEMBER_REPORT_MONTH_RE.test(month)) {
     throw new ApiRouteError(400, "INVALID_REPORT_MONTH", "The report month must be in YYYY-MM format.");
   }
-  if (!memberEmail.trim()) {
-    throw new ApiRouteError(400, "MEMBER_EMAIL_REQUIRED", "A member email is required.");
+  if (!memberName && !memberEmail) {
+    throw new ApiRouteError(400, "MEMBER_REQUIRED", "A member name or email is required.");
   }
-  return { month, memberEmail };
+  return { month, memberName, memberEmail };
 }
 
 function mapMemberReportError(error: MemberReportError): ApiRouteError {
@@ -38,8 +39,8 @@ function mapMemberReportError(error: MemberReportError): ApiRouteError {
 export async function GET(req: Request) {
   const url = new URL(req.url);
   return runJson("GET /api/admin/reports/members", async () => {
-    const { month, memberEmail } = readReportQuery(url);
-    const snapshot = await getCompleteMemberReportSnapshot(memberEmail.trim().toLowerCase(), month);
+    const { month, memberName, memberEmail } = readReportQuery(url);
+    const snapshot = await getCompleteMemberReportSnapshotForMember({ memberName, memberEmail }, month);
     if (!snapshot) {
       throw new ApiRouteError(404, "REPORT_SNAPSHOT_NOT_FOUND", "Report snapshot is not available for this member and month.");
     }
@@ -65,21 +66,25 @@ export async function POST(req: Request) {
     if (!body || typeof body !== "object") {
       throw new ApiRouteError(400, "INVALID_BODY", "The request body must be an object.");
     }
-    const { month, memberEmail } = body as {
+    const { month, memberName, memberEmail } = body as {
       month?: unknown;
+      memberName?: unknown;
       memberEmail?: unknown;
     };
     if (typeof month !== "string" || !MEMBER_REPORT_MONTH_RE.test(month)) {
       throw new ApiRouteError(400, "INVALID_REPORT_MONTH", "The report month must be in YYYY-MM format.");
     }
-    if (typeof memberEmail !== "string" || !memberEmail.trim()) {
-      throw new ApiRouteError(400, "MEMBER_EMAIL_REQUIRED", "A member email is required.");
+    const normalizedMemberName = typeof memberName === "string" ? memberName.trim() : "";
+    const normalizedMemberEmail = typeof memberEmail === "string" ? memberEmail.trim().toLowerCase() : "";
+    if (!normalizedMemberName && !normalizedMemberEmail) {
+      throw new ApiRouteError(400, "MEMBER_REQUIRED", "A member name or email is required.");
     }
     try {
       const { snapshot, created } = await generateMemberReport({
         accessToken: session.accessToken,
         reportMonth: month,
-        memberEmail,
+        memberName: normalizedMemberName || null,
+        memberEmail: normalizedMemberEmail || null,
       });
       return { ...toMemberReportReadDto(snapshot), created };
     } catch (error) {

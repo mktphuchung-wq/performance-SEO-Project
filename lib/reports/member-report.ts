@@ -23,7 +23,7 @@ import {
 } from "@/lib/repositories/content-url-works";
 import { getMonthlyHistoryForUrls, isBaselineEligible, type MonthlyMetricRow } from "@/lib/repositories/content-url-monthly-metrics";
 import {
-  getCompleteMemberReportSnapshot,
+  getCompleteMemberReportSnapshotForMember,
   MEMBER_REPORT_RANGE_KEYS,
   publishMemberReportSnapshot,
   type CompleteMemberReportSnapshot,
@@ -57,7 +57,8 @@ export class MemberReportError extends Error {
 export interface GenerateMemberReportInput {
   accessToken: string;
   reportMonth: string;
-  memberEmail: string;
+  memberName?: string | null;
+  memberEmail?: string | null;
 }
 
 export interface MemberReportRangeWindow {
@@ -217,13 +218,14 @@ function normalizeIdentity(value: string | null | undefined): string {
 
 export function matchesRequestedAttribution(
   owner: Pick<UrlAttributionRow, "member_name" | "member_email">,
-  email: string,
+  email: string | null,
   memberName: string,
   aliases: ReadonlyMap<string, string>,
 ): boolean {
   const requestedName = normalizeIdentity(memberName);
   const ownerName = normalizeIdentity(owner.member_name);
   if (!requestedName || ownerName !== requestedName) return false;
+  if (!email) return true;
   const canonicalEmail = [...aliases].find(([name]) => normalizeIdentity(name) === ownerName)?.[1];
   if (canonicalEmail) return normalizeIdentity(canonicalEmail) === normalizeIdentity(email);
   return !owner.member_email || normalizeIdentity(owner.member_email) === normalizeIdentity(email);
@@ -358,7 +360,7 @@ function buildUrlSnapshot(
   row: UrlPerformanceRow,
   url: ContentUrl,
   memberName: string,
-  memberEmail: string,
+  memberEmail: string | null,
   score: UrlScoreResult,
   attribution: UrlAttributionRow,
 ): MemberReportUrlSnapshotInput {
@@ -408,25 +410,29 @@ export async function generateMemberReport(
   input: GenerateMemberReportInput,
 ): Promise<{ snapshot: CompleteMemberReportSnapshot; created: boolean }> {
   const ranges = memberReportRangeWindows(input.reportMonth);
-  const email = input.memberEmail.trim().toLowerCase();
-  if (!email) throw new MemberReportError("MEMBER_NOT_FOUND", "A member email is required");
-  let memberName: string | null;
-  try {
-    memberName = await resolveMemberNameForReport(email);
-  } catch (error) {
-    if (error instanceof MemberIdentityAmbiguityError) {
-      throw new MemberReportError(
-        "MEMBER_IDENTITY_AMBIGUOUS",
-        "The selected email maps to multiple canonical members",
-        { memberEmail: email, memberNames: error.memberNames },
-      );
+  const email = input.memberEmail?.trim().toLowerCase() || null;
+  let memberName = input.memberName?.trim() || null;
+  if (!memberName && email) {
+    try {
+      memberName = await resolveMemberNameForReport(email);
+    } catch (error) {
+      if (error instanceof MemberIdentityAmbiguityError) {
+        throw new MemberReportError(
+          "MEMBER_IDENTITY_AMBIGUOUS",
+          "The selected email maps to multiple canonical members",
+          { memberEmail: email, memberNames: error.memberNames },
+        );
+      }
+      throw error;
     }
-    throw error;
   }
   if (!memberName) {
-    throw new MemberReportError("MEMBER_NOT_FOUND", "No member is mapped to the selected email", { memberEmail: email });
+    throw new MemberReportError("MEMBER_NOT_FOUND", "A member name or mapped email is required", { memberEmail: email });
   }
-  const existing = await getCompleteMemberReportSnapshot(email, input.reportMonth);
+  const existing = await getCompleteMemberReportSnapshotForMember(
+    { memberName, memberEmail: email },
+    input.reportMonth,
+  );
   if (existing) return { snapshot: existing, created: false };
 
   const [settings, baselineSettings, projectSettings, aliases, attributions] = await Promise.all([

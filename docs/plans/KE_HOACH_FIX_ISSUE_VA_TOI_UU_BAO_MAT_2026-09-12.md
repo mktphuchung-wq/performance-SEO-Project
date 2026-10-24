@@ -2,7 +2,7 @@
 
 Ngày lập: 2026-09-12  
 Phạm vi: Performance SEO Project  
-Tài liệu đầu vào: `NPM_AUDIT_REMEDIATION_2026-09-12.md`
+Tài liệu đầu vào: `docs/plans/NPM_AUDIT_REMEDIATION_2026-09-12.md`
 
 ## 1. Mục tiêu thực thi
 

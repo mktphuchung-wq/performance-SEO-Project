@@ -62,7 +62,7 @@ Không tạo công thức performance/trend mới nếu codebase đã có logic 
 - `AGENTS.md`
 - `node_modules/next/dist/docs/` cho API/convention Next.js 16.3 đang dùng
 - `README.md`
-- `PERFORMANCE_SCORE_SPEC_v2.md`
+- `docs/specs/PERFORMANCE_SCORE_SPEC_v2.md`
 - `app/admin/members/page.tsx`
 - `app/dashboard/page.tsx`
 - `app/api/me/urls/route.ts`
